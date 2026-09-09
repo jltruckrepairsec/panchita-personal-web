@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Panchita Voice v2 (PROTOTYPE — NOT PRODUCTION)</title>
+<!--
+  ============================================================================
+  PANCHITA VOICE v2 -- ISOLATED PROTOTYPE. NOT PRODUCTION. NOT PUBLISHED.
+  ============================================================================
+  Production voice remains index.html (commit b01eb18) and is untouched.
+  GitHub Pages serves `main`; this file lives only on an unmerged branch.
+
+  Design: docs/voice-v2/PHASE1-ARCHITECTURE.md + docs/voice-v2/PHASE2-GATE0.md
+
+  GOVERNING INVARIANT -- the Realtime provider is EARS ONLY:
+    * turn_detection.create_response is false
+    * this client NEVER sends response.create
+    * this client NEVER sends conversation.item.create
+    * Central's answers are NEVER written into the Realtime session
+    * the Panchita session token is NEVER placed in any Realtime payload
+  Therefore the generative model emits no content, and semantic drift between
+  Central's text and spoken audio is structurally impossible rather than
+  prompt-mitigated. Speech is rendered by a non-generative text->audio
+  transform (Tier A: browser speechSynthesis).
+
+  GATE 0A IS OPEN: the voice-mint relay does not exist yet, so this page
+  cannot connect. It detects that and falls back to push-to-talk instead of
+  appearing broken.
+  ============================================================================
+-->
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --accent: #3fa9f5; --accent-dim: #235a7d;
+    --text: #eef1f6; --text-dim: #9aa4b2; --danger: #e2574c; --ok: #3fcf8e; --warn: #ffd479;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, Roboto, "Segoe UI", sans-serif; overscroll-behavior: none;
+  }
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
+  .screen { display: none; flex: 1; flex-direction: column; padding: 20px; }
+  .screen.active { display: flex; }
+
+  .proto-banner {
+    background: #3a3020; color: var(--warn); font-size: 11px; text-align: center;
+    padding: 6px 10px; border-bottom: 1px solid #5a4a2a; letter-spacing: 0.3px;
+  }
+
+  #login-screen { justify-content: center; align-items: center; gap: 18px; }
+  .login-card {
+    width: 100%; max-width: 360px; background: var(--card); border-radius: 16px;
+    padding: 28px 22px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .login-title { font-size: 22px; font-weight: 600; text-align: center; margin-bottom: 4px; }
+  .login-sub { font-size: 13px; color: var(--text-dim); text-align: center; margin-bottom: 10px; }
+  label { font-size: 13px; color: var(--text-dim); }
+  input[type=tel], input[type=password], input[type=text] {
+    width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #2a2f3a;
+    background: #0c0e12; color: var(--text); font-size: 16px; margin-top: 6px;
+  }
+  input:focus { outline: 2px solid var(--accent); }
+  button { border: none; border-radius: 10px; font-size: 16px; font-weight: 600; padding: 14px; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #06121a; }
+  .btn-primary:disabled { background: var(--accent-dim); color: #6b7885; }
+  .lang-toggle { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
+  .lang-btn { flex: 1; padding: 8px; border-radius: 8px; background: #0c0e12; color: var(--text-dim); border: 1px solid #2a2f3a; font-size: 13px; font-weight: 500; }
+  .lang-btn.active { background: var(--accent); color: #06121a; border-color: var(--accent); }
+  .error-box { background: rgba(226,87,76,0.12); border: 1px solid var(--danger); color: #ffb4ae; padding: 10px 12px; border-radius: 10px; font-size: 13px; display: none; }
+
+  #chat-screen { padding: 0; }
+  .chat-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: var(--card); border-bottom: 1px solid #22262f; }
+  .chat-header .title { font-weight: 600; font-size: 16px; }
+  .chat-header .session-pill { font-size: 11px; color: var(--text-dim); }
+  .logout-btn { background: transparent; color: var(--text-dim); font-size: 13px; padding: 8px 10px; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 88%; padding: 12px 14px; border-radius: 14px; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #06121a; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--card); border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; background: transparent; color: var(--text-dim); font-size: 12px; text-align: center; }
+  .msg.interim { align-self: flex-end; background: transparent; border: 1px dashed var(--accent-dim); color: var(--text-dim); font-style: italic; }
+  .sources { margin-top: 8px; font-size: 11px; color: var(--text-dim); display: flex; flex-direction: column; gap: 3px; }
+  .sources a { color: var(--accent); text-decoration: none; }
+
+  /* ---- Voice presence panel ---- */
+  .voice-panel { background: var(--card); border-top: 1px solid #22262f; padding: 12px 14px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .voice-state-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .state-chip { font-size: 12px; font-weight: 700; letter-spacing: 0.6px; padding: 6px 10px; border-radius: 999px; background: #0c0e12; color: var(--text-dim); border: 1px solid #2a2f3a; }
+  .state-chip.listening { background: rgba(63,207,142,0.14); color: var(--ok); border-color: var(--ok); }
+  .state-chip.capturing { background: rgba(63,169,245,0.16); color: var(--accent); border-color: var(--accent); }
+  .state-chip.thinking  { background: rgba(255,212,121,0.14); color: var(--warn); border-color: var(--warn); }
+  .state-chip.speaking  { background: rgba(63,169,245,0.16); color: var(--accent); border-color: var(--accent); }
+  .state-chip.muted     { background: rgba(226,87,76,0.16); color: var(--danger); border-color: var(--danger); }
+  .state-chip.error     { background: rgba(226,87,76,0.16); color: var(--danger); border-color: var(--danger); }
+  .level-meter { flex: 1; height: 6px; background: #0c0e12; border-radius: 3px; overflow: hidden; border: 1px solid #2a2f3a; }
+  .level-fill { height: 100%; width: 0%; background: var(--ok); transition: width 90ms linear; }
+  .voice-controls { display: flex; gap: 8px; }
+  .voice-controls button { flex: 1; font-size: 14px; padding: 12px 8px; }
+  .btn-start { background: var(--ok); color: #06231a; }
+  .btn-mute { background: #0c0e12; color: var(--text); border: 1px solid #2a2f3a; }
+  .btn-mute.on { background: var(--danger); color: #2a0b08; border-color: var(--danger); }
+  .btn-end { background: #0c0e12; color: var(--danger); border: 1px solid var(--danger); }
+  .voice-note { font-size: 11px; color: var(--text-dim); text-align: center; margin-top: 8px; line-height: 1.5; }
+  .voice-note a { color: var(--accent); }
+
+  .input-bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--card); border-top: 1px solid #22262f; }
+  .text-input { flex: 1; padding: 12px 14px; border-radius: 20px; border: 1px solid #2a2f3a; background: #0c0e12; color: var(--text); font-size: 15px; }
+  .send-btn { width: 48px; height: 48px; border-radius: 50%; background: var(--ok); color: #06231a; flex-shrink: 0; padding: 0; font-size: 18px; }
+  .send-btn:disabled { opacity: 0.4; }
+  .hint { font-size: 11px; color: var(--text-dim); text-align: center; padding: 4px 0 0; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(0,0,0,0.25); border-top-color: #06121a; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; vertical-align: -3px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="proto-banner">PROTOTIPO VOICE v2 — NO ES PRODUCCIÓN</div>
+
+  <!-- LOGIN -->
+  <div id="login-screen" class="screen active">
+    <div class="login-card">
+      <div class="login-title">Panchita Voice v2</div>
+      <div class="login-sub" id="login-sub">Acceso solo para el propietario</div>
+      <div class="lang-toggle">
+        <button type="button" class="lang-btn active" data-lang="es" id="lang-es">Español</button>
+        <button type="button" class="lang-btn" data-lang="en" id="lang-en">English</button>
+      </div>
+      <div>
+        <label id="label-phone">Últimos 4 dígitos de tu teléfono</label>
+        <input type="tel" id="phone4" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="1234" autocomplete="off">
+      </div>
+      <div>
+        <label id="label-pass">Contraseña</label>
+        <input type="password" id="password" autocomplete="off" placeholder="••••••••">
+      </div>
+      <div class="error-box" id="login-error"></div>
+      <button class="btn-primary" id="login-btn"><span id="login-btn-text">Entrar</span></button>
+      <div class="hint" id="login-hint">Tu contraseña nunca se guarda en este dispositivo.</div>
+    </div>
+  </div>
+
+  <!-- CHAT + VOICE -->
+  <div id="chat-screen" class="screen">
+    <div class="chat-header">
+      <div>
+        <div class="title">Panchita</div>
+        <div class="session-pill" id="session-pill">&nbsp;</div>
+      </div>
+      <button class="logout-btn" id="logout-btn">Salir</button>
+    </div>
+
+    <div id="messages"></div>
+
+    <div class="voice-panel">
+      <div class="voice-state-row">
+        <span class="state-chip" id="state-chip">VOZ APAGADA</span>
+        <div class="level-meter"><div class="level-fill" id="level-fill"></div></div>
+      </div>
+      <div class="voice-controls">
+        <button class="btn-start" id="voice-start">Iniciar voz</button>
+        <button class="btn-mute" id="voice-mute" disabled>Silenciar</button>
+        <button class="btn-end" id="voice-end" disabled>Terminar</button>
+      </div>
+      <div class="voice-note" id="voice-note">
+        El micrófono permanece abierto durante la sesión. Puedes interrumpir a Panchita hablando.
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <input type="text" class="text-input" id="text-input" placeholder="Escribe tu pregunta...">
+      <button class="send-btn" id="send-btn">➤</button>
+    </div>
+    <div class="hint" id="chat-hint">&nbsp;</div>
+  </div>
+</div>
+
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<script>
+(function () {
+  "use strict";
+
+  // ==========================================================================
+  // Configuration
+  // ==========================================================================
+
+  // Unchanged production contract. Voice v2 adds no new fields to it except
+  // voice_session_id, which the relay mints and the Gateway will validate.
+  var GATEWAY_URL = "https://panchita.app.n8n.cloud/webhook/panchita-personal-gateway-v01";
+
+  // GATE 0A: this relay does NOT exist yet. Until it does, minting fails and
+  // the page falls back to push-to-talk with an explicit message.
+  var VOICE_MINT_URL = "https://panchita.app.n8n.cloud/webhook/panchita-personal-voice-mint-v01";
+
+  // GATE 0A -- CONFIRM AT SETUP TIME.
+  // The SDP-exchange endpoint for the WebRTC handshake could not be verified:
+  // developers.openai.com and platform.openai.com are both blocked by this
+  // environment's egress proxy, so this value is taken from secondary sources
+  // and MUST be read off the live docs before the first connection attempt.
+  // It is isolated here precisely so it is a one-line correction.
+  var REALTIME_SDP_URL = "https://api.openai.com/v1/realtime/calls";
+
+  var PRODUCTION_FALLBACK_URL = "./index.html";
+
+  // Semantic VAD eagerness. "low" is the recommended start: the production
+  // incident being fixed was a PREMATURE cut-off, and Luis pauses to think.
+  // The ~8s figure is a ceiling for ambiguous trailing silence, not a delay --
+  // a clearly finished sentence still ends in a few hundred ms.
+  var VAD_EAGERNESS = "low";
+
+  var IDLE_AUTO_END_MS = 90000;   // stop billing a forgotten open mic
+  var MAX_VOICE_SESSION_MS = 20 * 60 * 1000;
+  var CONNECT_TIMEOUT_MS = 10000;
+  var ICE_GRACE_MS = 3000;
+  var MAX_RECONNECTS = 2;
+
+  // ==========================================================================
+  // State (memory only -- never persisted, matching production)
+  // ==========================================================================
+
+  var state = {
+    lang: "es",
+    sessionToken: null,
+    sessionExpiresAt: null,
+    pendingPassword: null
+  };
+
+  var voice = {
+    phase: "IDLE",          // IDLE MINTING CONNECTING LISTENING CAPTURING THINKING SPEAKING MUTED RECONNECTING ENDED
+    pc: null,
+    dc: null,
+    localStream: null,
+    audioSender: null,
+    voiceSessionId: null,
+    muted: false,
+    hardMute: false,
+    reconnects: 0,
+    turnSeq: 0,             // monotonic; used to discard superseded turns
+    inFlightTurn: null,
+    spokenNow: "",          // exact text currently being spoken (echo guard)
+    idleTimer: null,
+    maxTimer: null,
+    connectTimer: null,
+    iceTimer: null,
+    wakeLock: null,
+    audioCtx: null,
+    analyser: null,
+    levelRaf: null
+  };
+
+  var STR = {
+    es: {
+      subLogin: "Acceso solo para el propietario",
+      labelPhone: "Últimos 4 dígitos de tu teléfono", labelPass: "Contraseña",
+      loginBtn: "Entrar", loginHint: "Tu contraseña nunca se guarda en este dispositivo.",
+      needBoth: "Ingresa los 4 dígitos y tu contraseña.",
+      genericError: "No se pudo conectar. Intenta de nuevo.",
+      textPlaceholder: "Escribe tu pregunta...", thinking: "Pensando...",
+      sessionActive: "Sesión activa", sessionExpired: "Tu sesión expiró. Vuelve a iniciar sesión.",
+      loggedOut: "Sesión cerrada.", emptySubmit: "Escribe o di algo antes de enviar.",
+      ackPhrase: "Déjame ver.",
+      stOff: "VOZ APAGADA", stMinting: "AUTORIZANDO", stConnecting: "CONECTANDO",
+      stListening: "ESCUCHANDO", stCapturing: "TE ESCUCHO", stThinking: "PENSANDO",
+      stSpeaking: "PANCHITA HABLA", stMuted: "SILENCIADO", stReconnecting: "RECONECTANDO",
+      stError: "ERROR DE VOZ",
+      btnStart: "Iniciar voz", btnMute: "Silenciar", btnUnmute: "Reactivar", btnEnd: "Terminar",
+      noteIdle: "El micrófono permanece abierto durante la sesión. Puedes interrumpir a Panchita hablando.",
+      noteLive: "Micrófono abierto. Habla con naturalidad; puedes pausar para pensar.",
+      noteMuted: "Micrófono silenciado. No se transmite audio hasta que lo reactives.",
+      gate0: "Voz v2 no está disponible todavía: falta la credencial del proveedor (Gate 0A). " +
+             "Usa el modo actual de presionar-para-hablar.",
+      noWebrtc: "Este navegador no soporta WebRTC. Si abriste el enlace desde otra app, ábrelo en Chrome.",
+      micDenied: "Permiso de micrófono denegado. Actívalo en los ajustes de Chrome para este sitio.",
+      budgetOut: "Se acabó el tiempo de voz de esta sesión. Puedes seguir escribiendo o iniciar voz de nuevo.",
+      rateLimited: "Vas muy rápido. Espera unos segundos y sigue.",
+      notPermitted: "Esta cuenta no tiene permiso de voz.",
+      idleEnded: "Sesión de voz terminada por inactividad.",
+      maxEnded: "Sesión de voz terminada (duración máxima).",
+      offline: "Sin conexión. Reconectando...",
+      fallbackLink: "Volver al modo presionar-para-hablar"
+    },
+    en: {
+      subLogin: "Owner access only",
+      labelPhone: "Last 4 digits of your phone", labelPass: "Password",
+      loginBtn: "Sign in", loginHint: "Your password is never stored on this device.",
+      needBoth: "Enter the 4 digits and your password.",
+      genericError: "Couldn't connect. Please try again.",
+      textPlaceholder: "Type your question...", thinking: "Thinking...",
+      sessionActive: "Session active", sessionExpired: "Your session expired. Please sign in again.",
+      loggedOut: "Signed out.", emptySubmit: "Type or say something before sending.",
+      ackPhrase: "Let me check.",
+      stOff: "VOICE OFF", stMinting: "AUTHORIZING", stConnecting: "CONNECTING",
+      stListening: "LISTENING", stCapturing: "HEARING YOU", stThinking: "THINKING",
+      stSpeaking: "PANCHITA SPEAKING", stMuted: "MUTED", stReconnecting: "RECONNECTING",
+      stError: "VOICE ERROR",
+      btnStart: "Start voice", btnMute: "Mute", btnUnmute: "Unmute", btnEnd: "End",
+      noteIdle: "The microphone stays open for the session. You can interrupt Panchita by speaking.",
+      noteLive: "Microphone open. Speak naturally; you can pause to think.",
+      noteMuted: "Microphone muted. No audio is transmitted until you unmute.",
+      gate0: "Voice v2 isn't available yet: the provider credential is missing (Gate 0A). " +
+             "Use the current push-to-talk mode.",
+      noWebrtc: "This browser doesn't support WebRTC. If you opened this from another app, open it in Chrome.",
+      micDenied: "Microphone permission denied. Enable it in Chrome's site settings.",
+      budgetOut: "This session's voice time is used up. You can keep typing, or start voice again.",
+      rateLimited: "Going a bit fast. Wait a few seconds and continue.",
+      notPermitted: "This account doesn't have voice permission.",
+      idleEnded: "Voice session ended due to inactivity.",
+      maxEnded: "Voice session ended (maximum duration).",
+      offline: "Offline. Reconnecting...",
+      fallbackLink: "Back to push-to-talk mode"
+    }
+  };
+  function t(k) { return STR[state.lang][k]; }
+
+  // ==========================================================================
+  // DOM
+  // ==========================================================================
+  var el = {};
+  ["login-screen","chat-screen","phone4","password","login-btn","login-btn-text","login-error",
+   "messages","text-input","send-btn","session-pill","chat-hint","logout-btn","state-chip",
+   "level-fill","voice-start","voice-mute","voice-end","voice-note","remote-audio",
+   "lang-es","lang-en","login-sub","label-phone","label-pass","login-hint"
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function applyLangToUI() {
+    el["login-sub"].textContent = t("subLogin");
+    el["label-phone"].textContent = t("labelPhone");
+    el["label-pass"].textContent = t("labelPass");
+    el["login-btn-text"].textContent = t("loginBtn");
+    el["login-hint"].textContent = t("loginHint");
+    el["text-input"].placeholder = t("textPlaceholder");
+    el["lang-es"].classList.toggle("active", state.lang === "es");
+    el["lang-en"].classList.toggle("active", state.lang === "en");
+    el["voice-start"].textContent = t("btnStart");
+    el["voice-mute"].textContent = voice.muted ? t("btnUnmute") : t("btnMute");
+    el["voice-end"].textContent = t("btnEnd");
+    renderPhase();
+  }
+  el["lang-es"].addEventListener("click", function () { state.lang = "es"; applyLangToUI(); });
+  el["lang-en"].addEventListener("click", function () { state.lang = "en"; applyLangToUI(); });
+
+  function showScreen(id) {
+    document.querySelectorAll(".screen").forEach(function (s) { s.classList.remove("active"); });
+    document.getElementById(id).classList.add("active");
+  }
+  function showLoginError(m) { el["login-error"].textContent = m; el["login-error"].style.display = "block"; }
+  function hideLoginError() { el["login-error"].style.display = "none"; }
+
+  // ==========================================================================
+  // Rendering
+  // ==========================================================================
+  function addMsg(cls, text) {
+    var d = document.createElement("div");
+    d.className = "msg " + cls;
+    d.textContent = text;
+    el["messages"].appendChild(d);
+    el["messages"].scrollTop = el["messages"].scrollHeight;
+    return d;
+  }
+  function removeEl(node) { if (node && node.parentNode) node.parentNode.removeChild(node); }
+
+  function renderBotMessage(body) {
+    var d = document.createElement("div");
+    d.className = "msg bot";
+    d.textContent = body.human_readable_response || "";
+    if (body.sources && body.sources.length) {
+      var w = document.createElement("div");
+      w.className = "sources";
+      body.sources.slice(0, 4).forEach(function (s) {
+        var a = document.createElement("a");
+        a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.textContent = "• " + (s.source_name || s.url);
+        w.appendChild(a);
+      });
+      d.appendChild(w);
+    }
+    el["messages"].appendChild(d);
+    el["messages"].scrollTop = el["messages"].scrollHeight;
+  }
+
+  function setNote(text) { el["voice-note"].textContent = text; }
+
+  function renderPhase() {
+    var chip = el["state-chip"];
+    var map = {
+      IDLE: ["stOff", ""], ENDED: ["stOff", ""],
+      MINTING: ["stMinting", "thinking"], CONNECTING: ["stConnecting", "thinking"],
+      LISTENING: ["stListening", "listening"], CAPTURING: ["stCapturing", "capturing"],
+      THINKING: ["stThinking", "thinking"], SPEAKING: ["stSpeaking", "speaking"],
+      MUTED: ["stMuted", "muted"], RECONNECTING: ["stReconnecting", "thinking"],
+      ERROR: ["stError", "error"]
+    };
+    var m = map[voice.phase] || map.IDLE;
+    chip.textContent = t(m[0]);
+    chip.className = "state-chip" + (m[1] ? " " + m[1] : "");
+
+    var live = ["LISTENING","CAPTURING","THINKING","SPEAKING","MUTED","RECONNECTING"].indexOf(voice.phase) >= 0;
+    el["voice-start"].disabled = live || voice.phase === "MINTING" || voice.phase === "CONNECTING";
+    el["voice-mute"].disabled = !live;
+    el["voice-end"].disabled = !live && voice.phase !== "MINTING" && voice.phase !== "CONNECTING";
+    el["voice-mute"].classList.toggle("on", voice.muted);
+    el["voice-mute"].textContent = voice.muted ? t("btnUnmute") : t("btnMute");
+  }
+
+  function setPhase(p) {
+    voice.phase = p;
+    renderPhase();
+    if (p === "MUTED") setNote(t("noteMuted"));
+    else if (["LISTENING","CAPTURING","THINKING","SPEAKING"].indexOf(p) >= 0) setNote(t("noteLive"));
+    else if (p === "IDLE" || p === "ENDED") setNote(t("noteIdle"));
+  }
+
+  // ==========================================================================
+  // Gateway client -- contract unchanged from production
+  // ==========================================================================
+  function callGateway(payload) {
+    return fetch(GATEWAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (res) {
+      return res.json().then(function (data) { return { httpStatus: res.status, body: data }; });
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Corrected denied-handling (PHASE2-GATE0.md §6).
+  // Production index.html treats ANY denied as session expiry and forces
+  // re-login. The Gateway already returns error.detail, so this is a
+  // client-only fix. The server stays authoritative: a client that wrongly
+  // keeps a token is simply denied again.
+  // --------------------------------------------------------------------------
+  var FATAL_DENIALS = [
+    "identity_session_expired", "identity_cross_tenant",
+    "identity_no_session", "identity_rate_limited"
+  ];
+
+  function classifyDenial(body) {
+    var detail = (body && body.error && body.error.detail) ? String(body.error.detail) : "";
+    if (FATAL_DENIALS.indexOf(detail) >= 0) return { kind: "logout", detail: detail };
+    if (detail === "rate_limited") return { kind: "throttle", detail: detail };
+    if (detail === "voice_budget_exhausted") return { kind: "voice_exhausted", detail: detail };
+    if (detail === "no_permission_grant") return { kind: "forbidden", detail: detail };
+    // Unknown or missing: keep the session. Fail soft on the UI, not on the server.
+    return { kind: "soft", detail: detail };
+  }
+
+  function handleDenial(body) {
+    var c = classifyDenial(body);
+    if (c.kind === "logout") {
+      endVoiceSession(true);
+      clearSessionAndReturnToLogin(body.human_readable_response || t("sessionExpired"));
+    } else if (c.kind === "voice_exhausted") {
+      endVoiceSession(false);
+      addMsg("system", t("budgetOut"));
+    } else if (c.kind === "throttle") {
+      addMsg("system", t("rateLimited"));
+    } else if (c.kind === "forbidden") {
+      endVoiceSession(false);
+      addMsg("system", t("notPermitted"));
+    } else {
+      addMsg("system", body.human_readable_response || t("genericError"));
+    }
+    return c;
+  }
+
+  // ==========================================================================
+  // Login / logout
+  // ==========================================================================
+  el["login-btn"].addEventListener("click", doLogin);
+  el["password"].addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
+
+  function doLogin() {
+    hideLoginError();
+    var last4 = (el["phone4"].value || "").trim();
+    var pass = el["password"].value || "";
+    if (!/^[0-9]{4}$/.test(last4) || pass.length === 0) { showLoginError(t("needBoth")); return; }
+
+    state.pendingPassword = pass;
+    el["login-btn"].disabled = true;
+    el["login-btn-text"].innerHTML = '<span class="spinner"></span>';
+
+    callGateway({
+      message: state.lang === "es" ? "Hola" : "Hello",
+      language: state.lang,
+      phone_hint: "XXX-XXX-" + last4,
+      factor_provided: state.pendingPassword
+    }).then(function (r) {
+      state.pendingPassword = null;
+      el["password"].value = "";
+      el["login-btn"].disabled = false;
+      el["login-btn-text"].textContent = t("loginBtn");
+      var body = r.body || {};
+      if (body.status === "completed" && body.session_token) {
+        state.sessionToken = body.session_token;
+        state.sessionExpiresAt = body.session_expires_at || null;
+        el["messages"].innerHTML = "";
+        showScreen("chat-screen");
+        el["session-pill"].textContent = t("sessionActive");
+        el["phone4"].value = "";
+        renderBotMessage(body);
+      } else {
+        showLoginError(body.human_readable_response || t("genericError"));
+      }
+    }).catch(function () {
+      state.pendingPassword = null;
+      el["password"].value = "";
+      el["login-btn"].disabled = false;
+      el["login-btn-text"].textContent = t("loginBtn");
+      showLoginError(t("genericError"));
+    });
+  }
+
+  el["logout-btn"].addEventListener("click", function () {
+    var token = state.sessionToken;
+    endVoiceSession(true);
+    clearSessionAndReturnToLogin(t("loggedOut"));
+    if (token) callGateway({ action: "logout", language: state.lang, session_id: token }).catch(function () {});
+  });
+
+  function clearSessionAndReturnToLogin(msg) {
+    state.sessionToken = null; state.sessionExpiresAt = null; state.pendingPassword = null;
+    el["password"].value = ""; el["messages"].innerHTML = "";
+    showScreen("login-screen"); applyLangToUI();
+    if (msg) showLoginError(msg);
+  }
+
+  // ==========================================================================
+  // Speech OUT -- Tier A: browser speechSynthesis.
+  // Non-generative text->audio transform. It cannot reason, answer, add facts
+  // or paraphrase, so Central's text is spoken exactly as returned. Central's
+  // answers are never sent to the Realtime provider.
+  // ==========================================================================
+  var cachedVoices = [];
+  function refreshVoices() {
+    try { cachedVoices = window.speechSynthesis.getVoices() || []; } catch (e) { cachedVoices = []; }
+  }
+  if ("speechSynthesis" in window) {
+    refreshVoices();
+    try {
+      if (typeof window.speechSynthesis.addEventListener === "function") {
+        window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+      } else { window.speechSynthesis.onvoiceschanged = refreshVoices; }
+    } catch (e) { /* non-fatal */ }
+  }
+  function pickVoice(locale) {
+    if (!cachedVoices.length) refreshVoices();
+    if (!cachedVoices.length) return null;
+    var wanted = String(locale).toLowerCase().replace("_", "-");
+    var prefix = wanted.split("-")[0];
+    var i, lang;
+    for (i = 0; i < cachedVoices.length; i++) {
+      lang = String(cachedVoices[i].lang || "").toLowerCase().replace("_", "-");
+      if (lang === wanted) return cachedVoices[i];
+    }
+    for (i = 0; i < cachedVoices.length; i++) {
+      lang = String(cachedVoices[i].lang || "").toLowerCase().replace("_", "-");
+      if (lang === prefix || lang.indexOf(prefix + "-") === 0) return cachedVoices[i];
+    }
+    return null;
+  }
+  // Generation counter. Android Chrome drops an utterance queued in the same
+  // task as cancel(), so speak() defers past the cancel -- which means a
+  // barge-in landing inside that window would otherwise be overtaken by the
+  // deferred utterance and Panchita would start talking over Luis. Every
+  // stopSpeaking() invalidates any deferral still pending.
+  var speakGen = 0;
+  var speakTimerHandle = null;
+
+  function stopSpeaking() {
+    speakGen++;
+    voice.spokenNow = "";
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    if (!("speechSynthesis" in window)) return;
+    try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+  }
+
+  // authoritativeText is Central's exact human_readable_response.
+  function speak(authoritativeText, onDone) {
+    if (!authoritativeText || !("speechSynthesis" in window)) { if (onDone) onDone(); return; }
+
+    // Layer 3 verification: never render anything but Central's exact string.
+    var toSpeak = String(authoritativeText);
+    var myGen = ++speakGen;
+    voice.spokenNow = toSpeak;
+
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+
+    speakTimerHandle = setTimeout(function () {
+      speakTimerHandle = null;
+      if (myGen !== speakGen) return;   // superseded or cancelled while deferred
+      try {
+        var u = new SpeechSynthesisUtterance(toSpeak);
+        var locale = state.lang === "es" ? "es-ES" : "en-US";
+        var v = pickVoice(locale);
+        if (v) { u.voice = v; u.lang = v.lang || locale; } else { u.lang = locale; }
+        u.onend = function () {
+          if (myGen !== speakGen) return;
+          voice.spokenNow = ""; if (onDone) onDone();
+        };
+        u.onerror = function () {
+          if (myGen !== speakGen) return;
+          voice.spokenNow = ""; if (onDone) onDone();
+        };
+        window.speechSynthesis.speak(u);
+      } catch (e) {
+        if (myGen !== speakGen) return;
+        voice.spokenNow = ""; if (onDone) onDone();
+      }
+    }, 180);
+  }
+
+  // ==========================================================================
+  // Echo guard -- because we know EXACTLY what is being spoken, text-similarity
+  // echo detection is highly reliable. This backs up device/browser AEC.
+  // ==========================================================================
+  function normalizeForCompare(s) {
+    return String(s || "").toLowerCase().normalize("NFD")
+      .replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+  }
+  function looksLikeEcho(transcript) {
+    if (!voice.spokenNow) return false;
+    var a = normalizeForCompare(transcript);
+    var b = normalizeForCompare(voice.spokenNow);
+    if (a.length < 8) return false;
+    if (b.indexOf(a) >= 0) return true;
+    var wordsA = a.split(" "), hit = 0;
+    for (var i = 0; i < wordsA.length; i++) if (b.indexOf(wordsA[i]) >= 0) hit++;
+    return wordsA.length > 0 && (hit / wordsA.length) > 0.75;
+  }
+
+  // ==========================================================================
+  // Turn submission -- ordinary Gateway request, unchanged contract
+  // ==========================================================================
+  function submitVoiceTurn(transcript) {
+    var text = (transcript || "").trim();
+    if (!text) { setPhase("LISTENING"); return; }
+    if (!state.sessionToken) { endVoiceSession(true); clearSessionAndReturnToLogin(t("sessionExpired")); return; }
+
+    var seq = ++voice.turnSeq;
+    voice.inFlightTurn = seq;
+
+    addMsg("user", text);
+    setPhase("THINKING");
+
+    // Cover the Gateway round trip (n8n + Central), which is seconds, not ms.
+    speak(t("ackPhrase"));
+
+    var payload = {
+      message: text,
+      language: state.lang,
+      session_id: state.sessionToken
+    };
+    if (voice.voiceSessionId) payload.voice_session_id = voice.voiceSessionId;
+
+    callGateway(payload).then(function (r) {
+      // Stale-turn rule: discard an answer to a superseded question.
+      if (seq !== voice.turnSeq) return;
+      voice.inFlightTurn = null;
+      var body = r.body || {};
+
+      if (body.status === "completed") {
+        if (body.session_token) {
+          state.sessionToken = body.session_token;
+          state.sessionExpiresAt = body.session_expires_at || null;
+        }
+        renderBotMessage(body);
+        if (voice.phase !== "IDLE" && voice.phase !== "ENDED") {
+          setPhase("SPEAKING");
+          speak(body.human_readable_response, function () {
+            if (voice.phase === "SPEAKING") setPhase(voice.muted ? "MUTED" : "LISTENING");
+          });
+        }
+      } else if (body.status === "denied") {
+        stopSpeaking();
+        var c = handleDenial(body);
+        if (c.kind !== "logout" && c.kind !== "voice_exhausted" && c.kind !== "forbidden") {
+          setPhase(voice.muted ? "MUTED" : "LISTENING");
+        }
+      } else {
+        stopSpeaking();
+        renderBotMessage(body);
+        setPhase(voice.muted ? "MUTED" : "LISTENING");
+      }
+    }).catch(function () {
+      if (seq !== voice.turnSeq) return;
+      voice.inFlightTurn = null;
+      stopSpeaking();
+      addMsg("system", t("genericError"));
+      setPhase(voice.muted ? "MUTED" : "LISTENING");
+    });
+  }
+
+  // Text path, preserved in the same interface (requirement 15).
+  function sendTextMessage(text) {
+    var trimmed = (text || "").trim();
+    if (!trimmed) return;
+    if (!state.sessionToken) { clearSessionAndReturnToLogin(t("sessionExpired")); return; }
+    addMsg("user", trimmed);
+    el["text-input"].value = "";
+    el["send-btn"].disabled = true;
+    var thinking = addMsg("system", t("thinking"));
+    callGateway({ message: trimmed, language: state.lang, session_id: state.sessionToken })
+      .then(function (r) {
+        removeEl(thinking); el["send-btn"].disabled = false;
+        var body = r.body || {};
+        if (body.status === "completed") {
+          if (body.session_token) {
+            state.sessionToken = body.session_token;
+            state.sessionExpiresAt = body.session_expires_at || null;
+          }
+          renderBotMessage(body);
+        } else if (body.status === "denied") {
+          handleDenial(body);
+        } else {
+          renderBotMessage(body);
+        }
+      }).catch(function () {
+        removeEl(thinking); el["send-btn"].disabled = false;
+        addMsg("system", t("genericError"));
+      });
+  }
+  el["send-btn"].addEventListener("click", function () { sendTextMessage(el["text-input"].value); });
+  el["text-input"].addEventListener("keydown", function (e) { if (e.key === "Enter") sendTextMessage(el["text-input"].value); });
+
+  // ==========================================================================
+  // Voice session lifecycle
+  // ==========================================================================
+  function webrtcSupported() {
+    return !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  el["voice-start"].addEventListener("click", startVoiceSession);
+  el["voice-mute"].addEventListener("click", toggleMute);
+  el["voice-end"].addEventListener("click", function () { endVoiceSession(false); });
+
+  function gate0Fallback(message) {
+    setPhase("ERROR");
+    var d = addMsg("system", message);
+    var a = document.createElement("a");
+    a.href = PRODUCTION_FALLBACK_URL;
+    a.textContent = " " + t("fallbackLink");
+    a.style.color = "var(--accent)";
+    d.appendChild(a);
+    teardownTransport();
+    setPhase("IDLE");
+  }
+
+  function startVoiceSession() {
+    if (!state.sessionToken) { clearSessionAndReturnToLogin(t("sessionExpired")); return; }
+    if (!webrtcSupported()) { gate0Fallback(t("noWebrtc")); return; }
+
+    setPhase("MINTING");
+    voice.reconnects = 0;
+
+    // Autoplay: the remote element must be primed inside the user gesture.
+    try { el["remote-audio"].play().catch(function () {}); } catch (e) { /* ignore */ }
+
+    mintVoiceSession().then(function (mint) {
+      return acquireMicrophone().then(function () { return connectRealtime(mint); });
+    }).then(function () {
+      voice.reconnects = 0;
+      setPhase("LISTENING");
+      armIdleTimer();
+      armMaxTimer();
+      requestWakeLock();
+    }).catch(function (err) {
+      var m = (err && err.__kind === "mic_denied") ? t("micDenied")
+            : (err && err.__kind === "gate0") ? t("gate0")
+            : t("gate0");
+      gate0Fallback(m);
+    });
+  }
+
+  // GATE 0A: the relay does not exist yet, so this rejects. That is expected
+  // and is reported honestly rather than as a generic failure.
+  function mintVoiceSession() {
+    return fetch(VOICE_MINT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: state.sessionToken, language: state.lang })
+    }).then(function (res) {
+      if (!res.ok) { var e = new Error("mint_failed"); e.__kind = "gate0"; throw e; }
+      return res.json();
+    }).then(function (data) {
+      if (!data || !data.client_secret) { var e = new Error("mint_empty"); e.__kind = "gate0"; throw e; }
+      voice.voiceSessionId = data.voice_session_id || null;
+      return data;
+    }, function () {
+      var e = new Error("mint_unreachable"); e.__kind = "gate0"; throw e;
+    });
+  }
+
+  // Acquired ONCE per session and held across turns. Per-turn re-acquisition is
+  // what makes the current push-to-talk build fragile on Android.
+  function acquireMicrophone() {
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,   // primary defence against self-transcription
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1
+      }
+    }).then(function (stream) {
+      voice.localStream = stream;
+      startLevelMeter(stream);
+      stream.getAudioTracks().forEach(function (tr) {
+        tr.onended = function () { handleTrackEnded(); };
+      });
+      return stream;
+    }, function () {
+      var e = new Error("mic_denied"); e.__kind = "mic_denied"; throw e;
+    });
+  }
+
+  function connectRealtime(mint) {
+    return new Promise(function (resolve, reject) {
+      var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      voice.pc = pc;
+
+      pc.ontrack = function (ev) {
+        // Present for completeness. In the ears-only design we never create a
+        // response, so no remote audio is expected on this track.
+        try { el["remote-audio"].srcObject = ev.streams[0]; } catch (e) { /* ignore */ }
+      };
+
+      var track = voice.localStream.getAudioTracks()[0];
+      voice.audioSender = pc.addTrack(track, voice.localStream);
+
+      var dc = pc.createDataChannel("oai-events");
+      voice.dc = dc;
+      dc.onopen = function () { configureRealtimeSession(); };
+      dc.onmessage = function (ev) { handleRealtimeEvent(ev); };
+
+      pc.oniceconnectionstatechange = function () {
+        var s = pc.iceConnectionState;
+        if (s === "failed" || s === "disconnected") scheduleReconnect();
+        else if (s === "connected" || s === "completed") clearIceTimer();
+      };
+
+      voice.connectTimer = setTimeout(function () {
+        reject(new Error("connect_timeout"));
+      }, CONNECT_TIMEOUT_MS);
+
+      setPhase("CONNECTING");
+
+      pc.createOffer().then(function (offer) {
+        return pc.setLocalDescription(offer).then(function () { return offer; });
+      }).then(function (offer) {
+        return fetch(REALTIME_SDP_URL, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + mint.client_secret,
+            "Content-Type": "application/sdp"
+          },
+          body: offer.sdp
+        });
+      }).then(function (res) {
+        if (!res.ok) throw new Error("sdp_exchange_failed");
+        return res.text();
+      }).then(function (answerSdp) {
+        return pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+      }).then(function () {
+        clearTimeout(voice.connectTimer); voice.connectTimer = null;
+        resolve();
+      }).catch(function (e) {
+        clearTimeout(voice.connectTimer); voice.connectTimer = null;
+        reject(e);
+      });
+    });
+  }
+
+  // The session config that makes drift structurally impossible.
+  function configureRealtimeSession() {
+    sendRealtime({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        audio: {
+          input: {
+            transcription: { model: "gpt-live-transcribe" },
+            turn_detection: {
+              type: "semantic_vad",
+              eagerness: VAD_EAGERNESS,
+              create_response: false,   // the model may never answer
+              interrupt_response: false // nothing to interrupt: we create nothing
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function sendRealtime(obj) {
+    // Receive-only discipline: the ONLY messages this client may send are
+    // session.update and input_audio_buffer.clear. Never response.create,
+    // never conversation.item.create.
+    var allowed = ["session.update", "input_audio_buffer.clear"];
+    if (allowed.indexOf(obj.type) < 0) return;
+    try {
+      if (voice.dc && voice.dc.readyState === "open") voice.dc.send(JSON.stringify(obj));
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function handleRealtimeEvent(ev) {
+    var msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (!msg || !msg.type) return;
+
+    if (msg.type === "input_audio_buffer.speech_started") {
+      touchIdle();
+      // Barge-in: Luis speaking cancels Panchita immediately, and any answer
+      // already in flight is marked stale so it is never spoken.
+      if (voice.phase === "SPEAKING" || voice.spokenNow) {
+        stopSpeaking();
+        voice.turnSeq++;          // invalidates the in-flight turn
+        voice.inFlightTurn = null;
+      }
+      if (!voice.muted) setPhase("CAPTURING");
+      return;
+    }
+
+    if (msg.type === "conversation.item.input_audio_transcription.completed") {
+      var transcript = msg.transcript || "";
+      touchIdle();
+      if (voice.muted) return;
+      if (looksLikeEcho(transcript)) return;   // Panchita heard herself
+      submitVoiceTurn(transcript);
+      return;
+    }
+
+    if (msg.type === "error") {
+      setPhase("ERROR");
+      addMsg("system", t("genericError"));
+      setPhase(voice.muted ? "MUTED" : "LISTENING");
+    }
+  }
+
+  // ---- Mute -------------------------------------------------------------
+  // Soft mute: stop transmitting, keep the connection warm. The OS indicator
+  // stays lit because the device is still open -- stated honestly in the UI.
+  // Hard mute (track.stop) is available but costs 200-500ms to resume and can
+  // re-prompt on some Android builds.
+  function toggleMute() {
+    voice.muted = !voice.muted;
+    if (voice.muted) {
+      stopSpeaking();
+      if (voice.localStream) voice.localStream.getAudioTracks().forEach(function (tr) { tr.enabled = false; });
+      if (voice.audioSender && voice.audioSender.replaceTrack) {
+        try { voice.audioSender.replaceTrack(null); } catch (e) { /* ignore */ }
+      }
+      sendRealtime({ type: "input_audio_buffer.clear" });
+      voice.turnSeq++;  // discard anything mid-flight
+      setPhase("MUTED");
+    } else {
+      var track = voice.localStream ? voice.localStream.getAudioTracks()[0] : null;
+      if (track) {
+        track.enabled = true;
+        if (voice.audioSender && voice.audioSender.replaceTrack) {
+          try { voice.audioSender.replaceTrack(track); } catch (e) { /* ignore */ }
+        }
+      }
+      setPhase("LISTENING");
+      touchIdle();
+    }
+    renderPhase();
+  }
+
+  // ---- End session ------------------------------------------------------
+  function teardownTransport() {
+    clearTimers();
+    stopSpeaking();
+    stopLevelMeter();
+    try { if (voice.dc) voice.dc.close(); } catch (e) { /* ignore */ }
+    try { if (voice.pc) voice.pc.close(); } catch (e) { /* ignore */ }
+    if (voice.localStream) {
+      try { voice.localStream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) { /* ignore */ }
+    }
+    try { el["remote-audio"].srcObject = null; } catch (e) { /* ignore */ }
+    releaseWakeLock();
+    voice.pc = null; voice.dc = null; voice.localStream = null; voice.audioSender = null;
+    voice.voiceSessionId = null; voice.muted = false; voice.inFlightTurn = null;
+    voice.turnSeq++;
+  }
+
+  // Ending voice is NOT logging out: the Panchita session and text chat survive.
+  function endVoiceSession(silent) {
+    if (voice.phase === "IDLE" && !voice.pc) { if (!silent) setPhase("IDLE"); return; }
+    teardownTransport();
+    setPhase("IDLE");
+  }
+
+  // ---- Reconnect --------------------------------------------------------
+  function clearIceTimer() { if (voice.iceTimer) { clearTimeout(voice.iceTimer); voice.iceTimer = null; } }
+
+  function scheduleReconnect() {
+    if (voice.phase === "IDLE" || voice.phase === "ENDED") return;
+    if (voice.iceTimer) return;
+    setPhase("RECONNECTING");
+    voice.iceTimer = setTimeout(function () {
+      voice.iceTimer = null;
+      if (!voice.pc) return;
+      var s = voice.pc.iceConnectionState;
+      if (s === "connected" || s === "completed") { setPhase(voice.muted ? "MUTED" : "LISTENING"); return; }
+      if (voice.reconnects >= MAX_RECONNECTS) { gate0Fallback(t("offline")); return; }
+      voice.reconnects++;
+      try {
+        // Attempt ICE restart on the existing connection first.
+        voice.pc.restartIce();
+        setTimeout(function () {
+          if (!voice.pc) return;
+          var s2 = voice.pc.iceConnectionState;
+          if (s2 !== "connected" && s2 !== "completed") fullReconnect();
+          else setPhase(voice.muted ? "MUTED" : "LISTENING");
+        }, ICE_GRACE_MS);
+      } catch (e) { fullReconnect(); }
+    }, ICE_GRACE_MS);
+  }
+
+  function fullReconnect() {
+    if (voice.reconnects > MAX_RECONNECTS) { gate0Fallback(t("offline")); return; }
+    // The Panchita session token is never re-minted by a voice reconnect, and
+    // server-side conversation memory is keyed on the session hash, so context
+    // survives intact.
+    teardownTransport();
+    setPhase("MINTING");
+    mintVoiceSession()
+      .then(function (mint) { return acquireMicrophone().then(function () { return connectRealtime(mint); }); })
+      .then(function () { setPhase("LISTENING"); armIdleTimer(); armMaxTimer(); requestWakeLock(); })
+      .catch(function () { gate0Fallback(t("offline")); });
+  }
+
+  function handleTrackEnded() {
+    // Bluetooth switch or device revoked: re-acquire once, then fall back.
+    if (voice.phase === "IDLE" || voice.phase === "ENDED") return;
+    fullReconnect();
+  }
+
+  window.addEventListener("offline", function () {
+    if (voice.phase !== "IDLE" && voice.phase !== "ENDED") { setPhase("RECONNECTING"); addMsg("system", t("offline")); }
+  });
+  window.addEventListener("online", function () {
+    if (voice.phase === "RECONNECTING") fullReconnect();
+  });
+
+  // ---- Android: backgrounding / screen lock ------------------------------
+  // Never claim to be listening while suspended. Soft-mute and say so.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      if (["LISTENING","CAPTURING","THINKING","SPEAKING"].indexOf(voice.phase) >= 0 && !voice.muted) {
+        toggleMute();
+      }
+    } else {
+      requestWakeLock();
+    }
+  });
+
+  function requestWakeLock() {
+    if (!navigator.wakeLock || voice.wakeLock) return;
+    try {
+      navigator.wakeLock.request("screen").then(function (wl) {
+        voice.wakeLock = wl;
+        wl.addEventListener("release", function () { voice.wakeLock = null; });
+      }).catch(function () { /* non-fatal */ });
+    } catch (e) { /* non-fatal */ }
+  }
+  function releaseWakeLock() {
+    if (!voice.wakeLock) return;
+    try { voice.wakeLock.release(); } catch (e) { /* ignore */ }
+    voice.wakeLock = null;
+  }
+
+  // ---- Ceilings ---------------------------------------------------------
+  function clearTimers() {
+    if (voice.idleTimer) { clearTimeout(voice.idleTimer); voice.idleTimer = null; }
+    if (voice.maxTimer) { clearTimeout(voice.maxTimer); voice.maxTimer = null; }
+    if (voice.connectTimer) { clearTimeout(voice.connectTimer); voice.connectTimer = null; }
+    clearIceTimer();
+  }
+  function armIdleTimer() {
+    if (voice.idleTimer) clearTimeout(voice.idleTimer);
+    voice.idleTimer = setTimeout(function () {
+      endVoiceSession(false);
+      addMsg("system", t("idleEnded"));
+    }, IDLE_AUTO_END_MS);
+  }
+  function touchIdle() { armIdleTimer(); }
+  function armMaxTimer() {
+    if (voice.maxTimer) clearTimeout(voice.maxTimer);
+    voice.maxTimer = setTimeout(function () {
+      endVoiceSession(false);
+      addMsg("system", t("maxEnded"));
+    }, MAX_VOICE_SESSION_MS);
+  }
+
+  // ---- Input level meter (visible proof the mic is live) -----------------
+  function startLevelMeter(stream) {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      voice.audioCtx = new Ctx();
+      var src = voice.audioCtx.createMediaStreamSource(stream);
+      voice.analyser = voice.audioCtx.createAnalyser();
+      voice.analyser.fftSize = 512;
+      src.connect(voice.analyser);
+      var buf = new Uint8Array(voice.analyser.frequencyBinCount);
+      var tick = function () {
+        if (!voice.analyser) return;
+        voice.analyser.getByteTimeDomainData(buf);
+        var peak = 0;
+        for (var i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
+        var pct = voice.muted ? 0 : Math.min(100, Math.round((peak / 128) * 260));
+        el["level-fill"].style.width = pct + "%";
+        el["level-fill"].style.background = voice.muted ? "var(--danger)" : "var(--ok)";
+        voice.levelRaf = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (e) { /* non-fatal */ }
+  }
+  function stopLevelMeter() {
+    if (voice.levelRaf) { cancelAnimationFrame(voice.levelRaf); voice.levelRaf = null; }
+    voice.analyser = null;
+    if (voice.audioCtx) { try { voice.audioCtx.close(); } catch (e) { /* ignore */ } voice.audioCtx = null; }
+    el["level-fill"].style.width = "0%";
+  }
+
+  // ---- Session expiry watchdog ------------------------------------------
+  // Teardown runs BEFORE the login transition: never leave a hot microphone
+  // running on the login screen.
+  setInterval(function () {
+    if (state.sessionToken && state.sessionExpiresAt) {
+      if (new Date(state.sessionExpiresAt).getTime() <= Date.now()) {
+        endVoiceSession(true);
+        clearSessionAndReturnToLogin(t("sessionExpired"));
+      }
+    }
+  }, 15000);
+
+  window.addEventListener("pagehide", function () { teardownTransport(); });
+
+  applyLangToUI();
+})();
+</script>
+</body>
+</html>
