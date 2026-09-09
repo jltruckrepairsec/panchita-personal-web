@@ -214,19 +214,28 @@ test("a second turn works after the first one is answered", async () => {
 });
 
 /* -- Barge-in, echo, duplicates ------------------------------------------- */
-test("barge-in still interrupts Panchita and sends the new turn once", async () => {
+test("barge-in stops Panchita, and the speech she is interrupted with is not submitted", async () => {
+  // The contract changed with the self-echo fix, deliberately: nothing heard
+  // while her loudspeaker is live may become a turn, because at that moment
+  // her own audio and Luis's are indistinguishable. Barge-in still works --
+  // she stops -- and what Luis says once she is silent is an ordinary turn.
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 300);     // she is answering now
-  const spokenBefore = a.spoken.length;
-  for (const t of ["Espera", "Espera mejor", "Espera mejor manana"]) {
-    a.current().emitAppend(t, true);
-    await a.settle(40);
-  }
+  await a.settle(COALESCE_MS + 500);
+  assert.strictEqual(a.speaking(), true, "she should be speaking by now");
+
+  a.current().emitAppend("Espera", true);          // Luis talks over her
+  await a.settle(60);
+  assert.strictEqual(a.speaking(), false, "barge-in did not stop her");
+  assert.ok(a.stat("barge-ins") >= 1);
+
+  await a.settle(1500);                            // gate opens, mic reset
+  assert.strictEqual(a.gate(), "open");
+  a.current().emitAppend("mejor manana", true);    // he keeps talking
   await a.settle(COALESCE_MS + 2000);
-  const reqs = a.turnRequests().map((q) => q.body.message);
-  assert.deepStrictEqual(reqs, ["Hola Panchita", "Espera mejor manana"]);
-  assert.ok(a.spoken.length > spokenBefore, "barge-in produced no new speech");
+
+  assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
+    ["Hola Panchita", "mejor manana"]);
 });
 
 test("Panchita's own words are never submitted as a turn", async () => {

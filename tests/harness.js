@@ -198,13 +198,38 @@ function createApp(opts) {
     SpeechRecognition: FakeRecognition,
     isSecureContext: true,
     addEventListener() {},
+    /* A speechSynthesis that models the thing that actually causes the bug:
+       the loudspeaker stays live for a real, measurable stretch of time, and
+       `speaking` reports it. Utterance length scales with the text. */
     speechSynthesis: {
+      speaking: false,
+      pending: false,
       getVoices: () => [{ lang: "es-ES", name: "es" }],
       addEventListener() {},
-      cancel() {},
-      speak(u) { spoken.push(u.text); if (u.onend) clock.setTimeout(() => u.onend(), 50); }
+      cancel() {
+        this.speaking = false;
+        this.pending = false;
+        this._gen = (this._gen || 0) + 1;
+      },
+      speak(u) {
+        spoken.push(u.text);
+        const synth = this;
+        const gen = (synth._gen = (synth._gen || 0) + 1);
+        synth.speaking = true;
+        const ms = Math.max(400, String(u.text).length * 60);
+        clock.setTimeout(() => {
+          if (gen !== synth._gen) return;        // cancelled mid-utterance
+          synth.speaking = false;
+          if (u.onend) u.onend();
+        }, ms);
+      }
     }
   };
+  /* A browser with no speech synthesis at all. The TTS gate has nothing to
+     gate in that configuration, which is exactly where the circuit breaker is
+     the only backstop left. */
+  if (opts.noTts) delete sandbox.window.speechSynthesis;
+
   sandbox.navigator = {
     mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => [] }) }
   };
@@ -263,7 +288,17 @@ function createApp(opts) {
     phase() { return api.diag()["phase"]; },
     voiceActive() { return api.diag()["voice active"] === "true"; },
     loggedIn() { return getEl("chat-screen").classes.has("active"); },
-    messages() { return getEl("messages").children.map((c) => c.className + "|" + c.textContent); }
+    messages() { return getEl("messages").children.map((c) => c.className + "|" + c.textContent); },
+    /* Is Panchita's loudspeaker live right now? */
+    speaking() { return !!sandbox.window.speechSynthesis.speaking; },
+    gate() { return api.diag()["tts gate"]; },
+    /* Feed the microphone whatever the loudspeaker is currently playing, the
+       way an Android phone does. Returns the fragments injected. */
+    selfEcho(fragments) {
+      const r = api.current();
+      fragments.forEach((f) => r.emitAppend(f, true));
+      return fragments;
+    }
   };
   return api;
 }

@@ -41,6 +41,32 @@
       callback now returns unless it belongs to the recogniser the session
       currently owns, so a stale callback can never submit.
 
+    * SELF-ECHO CONTAINMENT (this revision). Reproduced on a real Android
+      phone: the loudspeaker fed straight back into the open microphone,
+      Panchita's own answer was recognised as user speech, fragments of it
+      ("Claro", "Aqui", "dime") became user bubbles, she answered herself,
+      and the loop ran until the Gateway message limit.
+
+      Root cause: submission was allowed at all times, and the ONLY thing
+      standing between her loudspeaker and a Gateway turn was a text
+      similarity test that ignored any transcript shorter than six
+      characters. Short fragments of her own speech walked straight through.
+
+      Fix: submission is now gated on LIFECYCLE, not on text. From the moment
+      speak() is called until speechSynthesis reports silence AND a tail has
+      elapsed, the gate is held and NOTHING the microphone hears may reach the
+      turn assembler or Gateway -- regardless of what it says, so a garbled
+      transcription of her audio is contained as reliably as an exact one.
+      When the gate opens the recogniser is replaced, so audio captured while
+      she spoke dies with it. The echo guard remains, with its length floor
+      removed, as defence in depth and to stop her interrupting herself.
+
+      Barge-in is preserved by separating the two acts: a transcript heard
+      while she is speaking may still STOP her, it simply cannot be SUBMITTED.
+      What Luis says once she is silent is an ordinary turn. The cost is that
+      the first word or two he speaks over her is not captured; that is the
+      deliberate price of the invariant.
+
   STILL OPEN: the long natural-pause problem is NOT solved here and must be
   verified physically on Android hardware.
 
@@ -264,6 +290,33 @@
   // PROVISIONAL: pending physical Android verification.
   var FINAL_COALESCE_MS = 400;
 
+  // --- Self-echo containment (the loudspeaker feedback loop) --------------
+  // On a real Android phone the loudspeaker feeds straight back into the open
+  // microphone. Text matching alone cannot hold that line: short fragments of
+  // Panchita's own answer ("Claro", "Aqui", "dime") are ordinary words, and a
+  // mis-transcription of her audio matches nothing at all. So submission is
+  // gated on LIFECYCLE instead: while her speaker is live, and for a tail
+  // afterwards, nothing the microphone hears may become a turn.
+  var TTS_TAIL_MS = 450;          // speaker tail / room reverb after she stops
+  var TTS_POLL_MS = 150;          // how often we re-check whether she is speaking
+  var TTS_MIN_HOLD_MS = 700;      // covers the deferred speak() start-up
+  var TTS_GATE_MAX_MS = 90000;    // absolute ceiling; the gate can never wedge
+
+  // Last-resort backstop for a feedback path the gate cannot cover: a browser
+  // with no speechSynthesis at all, where there is no TTS lifecycle to gate on
+  // and turns can therefore flow back to back.
+  //
+  // Sizing is measured, not guessed. With the gate working, relentless
+  // machine-speed input tops out around 17 voice turns per 20s, because the
+  // gate is shut for the whole time she is speaking; without TTS the same
+  // input reaches roughly 38. This threshold sits between the two, so the
+  // breaker cannot fire while the gate is doing its job, and still stops a
+  // runaway long before it reaches the Gateway message limit.
+  //
+  // The gate, not this, is what makes self-echo submission impossible.
+  var TURN_BREAKER_MAX = 25;
+  var TURN_BREAKER_WINDOW_MS = 20000;
+
   // NOTE: there is deliberately NO fixed silence timer. End-of-turn comes from
   // the recogniser's own endpointer (result.isFinal).
 
@@ -324,18 +377,54 @@
       spoke: function (text, now) {
         var n = normalizeSpeech(text);
         if (n) spoken.push({ n: n, at: now });
-        if (spoken.length > 4) spoken = spoken.slice(-4);
+        if (spoken.length > 8) spoken = spoken.slice(-8);
       },
+      // REAL-DEVICE FIX: the old rule ignored any transcript shorter than six
+      // characters, so "Claro", "Aqui" and "dime" -- exactly the fragments
+      // Android fed back from the loudspeaker -- were declared not-echo and
+      // submitted as user turns. There is no length floor any more, and words
+      // are matched on whole-word boundaries so "si" no longer matches inside
+      // "siempre".
+      // STRICT. Every word of the transcript is one she just said, or the
+      // transcript sits inside her phrase. Used where a false positive would
+      // silently swallow something Luis really said, so it must not fire on
+      // "cierra la orden del jueves" merely because she said "la orden del
+      // jueves". Used as defence in depth behind the TTS gate.
       isEcho: function (transcript, now) {
         var a = normalizeSpeech(transcript);
-        if (a.length < 6) return false;
+        if (!a) return false;
+        var words = a.split(" ");
         for (var i = 0; i < spoken.length; i++) {
           if ((now - spoken[i].at) > windowMs) continue;
           var b = spoken[i].n;
           if (!b) continue;
-          if (b.indexOf(a) >= 0) return true;
-          var words = a.split(" "), hit = 0;
-          for (var j = 0; j < words.length; j++) if (words[j] && b.indexOf(words[j]) >= 0) hit++;
+          if (b.indexOf(a) >= 0) return true;                            // inside her phrase
+          var hit = 0;
+          for (var j = 0; j < words.length; j++) {
+            if (words[j] && (" " + b + " ").indexOf(" " + words[j] + " ") >= 0) hit++;
+          }
+          if (words.length > 0 && hit === words.length) return true;     // every word is hers
+        }
+        return false;
+      },
+      // LENIENT. Strict, plus a majority-of-words match. Used ONLY to decide
+      // whether a transcript heard while she is speaking may interrupt her.
+      // A false positive there costs nothing -- the transcript was already
+      // barred from Gateway by the gate, and the worst case is that she
+      // finishes her sentence.
+      isLikelyEcho: function (transcript, now) {
+        if (this.isEcho(transcript, now)) return true;
+        var a = normalizeSpeech(transcript);
+        if (a.length < 6) return false;
+        var words = a.split(" ");
+        for (var i = 0; i < spoken.length; i++) {
+          if ((now - spoken[i].at) > windowMs) continue;
+          var b = spoken[i].n;
+          if (!b) continue;
+          var hit = 0;
+          for (var j = 0; j < words.length; j++) {
+            if (words[j] && (" " + b + " ").indexOf(" " + words[j] + " ") >= 0) hit++;
+          }
           if (words.length > 0 && (hit / words.length) > 0.7) return true;
         }
         return false;
@@ -453,7 +542,12 @@
     dedupe: createDedupe(DUP_WINDOW_MS, 12),
     echo: createEchoGuard(ECHO_WINDOW_MS),
     assembler: createTurnAssembler(FINAL_COALESCE_MS),
-    stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0, stale: 0, coalesced: 0 }
+    gate: "open",          // open | held  -- held whenever her speaker is live
+    ttsEpoch: 0,
+    gateTimer: null,
+    recentTurns: [],
+    stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0,
+             stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0 }
   };
 
   var STR = {
@@ -469,6 +563,7 @@
       ack: "Déjame ver.",
       sListening: "ESCUCHANDO", sThinking: "PENSANDO", sSpeaking: "PANCHITA HABLA", sMuted: "SILENCIADO",
       bMute: "Silenciar", bUnmute: "Reactivar", bEnd: "Terminar voz",
+      loopGuard: "Se detuvo la voz: el micrófono estaba captando la voz de Panchita. Toca el micrófono para volver a empezar, de preferencia con audífonos.",
       hintVoiceOn: "Voz activa. Habla normal; puedes pausar para pensar.",
       hintVoiceOff: "Toca el micrófono para conversar por voz.",
       hintMuted: "Micrófono silenciado. Toca Reactivar para seguir.",
@@ -496,6 +591,7 @@
       ack: "Let me check.",
       sListening: "LISTENING", sThinking: "THINKING", sSpeaking: "PANCHITA SPEAKING", sMuted: "MUTED",
       bMute: "Mute", bUnmute: "Unmute", bEnd: "End voice",
+      loopGuard: "Voice stopped: the microphone was picking up Panchita's own voice. Tap the microphone to start again, preferably with headphones.",
       hintVoiceOn: "Voice on. Speak normally; you can pause to think.",
       hintVoiceOff: "Tap the microphone to talk with voice.",
       hintMuted: "Microphone muted. Tap Unmute to continue.",
@@ -611,6 +707,11 @@
       "echoes suppressed: " + v.stats.echoes,
       "recogniser restarts: " + v.stats.restarts,
       "errors: " + v.stats.errors,
+      "tts gate: " + v.gate,
+      "gated while she spoke: " + v.stats.gated,
+      "barge-ins: " + v.stats.bargeIns,
+      "mic resets after tts: " + v.stats.micResets,
+      "breaker: " + v.stats.breaker,
       "interims ignored: " + v.stats.interims,
       "finals coalesced: " + v.stats.coalesced,
       "stale callbacks ignored: " + v.stats.stale,
@@ -741,11 +842,114 @@
     return null;
   }
 
+  // ==========================================================================
+  // THE TTS SUBMISSION GATE
+  // ==========================================================================
+  // The invariant this exists to hold: audio produced by Panchita's own
+  // loudspeaker can NEVER become a Gateway user turn.
+  //
+  // It is enforced by lifecycle, not by text. From the moment speak() is
+  // called until speechSynthesis reports it is neither speaking nor pending
+  // AND a tail has elapsed, the gate is "held" and NOTHING the microphone
+  // hears may reach the turn assembler or Gateway. Whether a held transcript
+  // happens to look like her words is irrelevant to that decision, so a
+  // mis-transcription of her audio is contained just as reliably as an exact
+  // one.
+  //
+  // Barge-in survives because stopping her and submitting a turn are separate
+  // acts. A held transcript may still stop her (that is the interruption);
+  // it simply cannot be submitted. Once she is silent the gate opens, the
+  // microphone is reset, and Luis's continuing speech is an ordinary turn.
+
+  function speakerBusy() {
+    try {
+      return !!(window.speechSynthesis &&
+                (window.speechSynthesis.speaking || window.speechSynthesis.pending));
+    } catch (e) { return false; }
+  }
+
+  function clearGateTimer() {
+    if (v.gateTimer) { clearTimeout(v.gateTimer); v.gateTimer = null; }
+  }
+
+  // Called the instant we decide to speak, before any audio exists.
+  function holdGate() {
+    v.gate = "held";
+    v.ttsEpoch++;
+    clearGateTimer();
+    // Nothing half-heard before she starts may survive into the held window.
+    v.assembler.discard();
+    return v.ttsEpoch;
+  }
+
+  // Wait until she is genuinely silent, then open. notBefore covers speak()'s
+  // deferred start-up, during which speechSynthesis is not yet "speaking".
+  function scheduleGateRelease(epoch, notBefore) {
+    clearGateTimer();
+    var deadline = Date.now() + TTS_GATE_MAX_MS;
+    (function poll() {
+      v.gateTimer = null;
+      if (epoch !== v.ttsEpoch) return;            // a newer utterance owns the gate
+      if (!v.active) { openGate(epoch, false); return; }
+      var now = Date.now();
+      if ((now < notBefore || speakerBusy()) && now < deadline) {
+        v.gateTimer = setTimeout(poll, TTS_POLL_MS);
+        return;
+      }
+      // She is silent. Hold through the speaker tail, then open.
+      v.gateTimer = setTimeout(function () {
+        v.gateTimer = null;
+        if (epoch !== v.ttsEpoch) return;
+        openGate(epoch, true);
+      }, TTS_TAIL_MS);
+    })();
+  }
+
+  // Opening the gate also RESETS THE MICROPHONE. The recogniser that was live
+  // while she spoke is aborted and dropped, so anything it captured from the
+  // loudspeaker dies with it and its queued callbacks are stale by identity.
+  // A fresh recogniser then listens to a quiet room.
+  function openGate(epoch, resetMic) {
+    if (epoch !== undefined && epoch !== v.ttsEpoch) return;
+    clearGateTimer();
+    if (resetMic && v.active && !v.paused && !v.stopping) {
+      if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
+      var old = v.rec;
+      v.rec = null;                                // drop ownership FIRST, so the
+      if (old) { try { old.abort(); } catch (e) { /* non-fatal */ } }  // onend abort()
+      v.assembler.discard();                       // fires with is already stale
+      v.stats.micResets++;
+      // Android Chrome can refuse a start() issued straight after abort().
+      // One retry on the normal restart delay; voice only fails if that fails
+      // too, because losing the session here would be worse than the echo.
+      try { v.rec = buildRecognizer(); v.rec.start(); }
+      catch (e) {
+        v.rec = null;
+        v.restartTimer = setTimeout(function () {
+          v.restartTimer = null;
+          if (!v.active || v.stopping || v.paused || v.rec) return;
+          try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
+          catch (e2) { failVoice(t("voiceFailed")); }
+          renderDiag();
+        }, RESTART_DELAY_MS);
+      }
+    } else {
+      v.assembler.discard();
+    }
+    v.gate = "open";
+    if (v.active && !v.paused && v.phase === "speaking") setPhase("listening");
+    renderDiag();
+  }
+
   function stopSpeaking() {
     v.speakGen++;
     if (v.speakTimer) { clearTimeout(v.speakTimer); v.speakTimer = null; }
-    if (!("speechSynthesis" in window)) return;
-    try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+    if ("speechSynthesis" in window) {
+      try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+    }
+    // Cancelling does not open the gate: the speaker has a tail, and Android
+    // reports "speaking" for a moment after cancel(). Re-arm the release.
+    if (v.gate === "held") scheduleGateRelease(v.ttsEpoch, Date.now());
   }
 
   function speak(text, onDone) {
@@ -754,6 +958,12 @@
     var gen = ++v.speakGen;
     v.echo.spoke(toSpeak, Date.now());     // arm the echo guard BEFORE speaking
 
+    // Close the submission gate BEFORE any audio exists, and keep it closed
+    // until she is measurably silent. This, not the echo guard, is what makes
+    // her own loudspeaker output unable to become a turn.
+    var epoch = holdGate();
+    scheduleGateRelease(epoch, Date.now() + TTS_MIN_HOLD_MS);
+
     if (v.speakTimer) { clearTimeout(v.speakTimer); v.speakTimer = null; }
     try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
 
@@ -761,6 +971,7 @@
     v.speakTimer = setTimeout(function () {
       v.speakTimer = null;
       if (gen !== v.speakGen) return;      // superseded (barge-in) while deferred
+      if (epoch !== v.ttsEpoch) return;    // a newer utterance owns the gate
       try {
         var u = new SpeechSynthesisUtterance(toSpeak);
         var locale = state.lang === "es" ? "es-ES" : "en-US";
@@ -877,16 +1088,30 @@
         var text = (res[0] && res[0].transcript) ? res[0].transcript : "";
         if (!text.trim()) continue;
 
-        // Echo is rejected per hypothesis so Panchita's own words never enter
-        // the turn buffer in the first place.
+        // ---- THE GATE ----------------------------------------------------
+        // Her loudspeaker is live (or still ringing out). Nothing heard here
+        // may be buffered or submitted, whatever it says. The only thing a
+        // held transcript may do is interrupt her.
+        if (v.gate === "held") {
+          v.stats.gated++;
+          // Echo matching is used ONLY to keep her from interrupting herself.
+          // It decides nothing about submission -- the gate already did that,
+          // so this side can afford to be lenient.
+          if (v.echo.isLikelyEcho(text, now)) { v.stats.echoes++; }
+          else {
+            v.stats.bargeIns++;
+            touchIdle();
+            stopSpeaking();     // she stops; the gate opens once she is silent
+          }
+          renderDiag();
+          continue;
+        }
+
+        // Echo is rejected per hypothesis so Panchita's words never enter the
+        // turn buffer, as defence in depth behind the gate.
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
 
         touchIdle();
-        // Barge-in stays immediate: she stops talking on the first real word.
-        // The submission itself still waits for the turn to be assembled, so
-        // the burst cannot become several Gateway requests.
-        if (v.phase === "speaking") stopSpeaking();
-
         if (v.assembler.hasPending()) v.stats.coalesced++;
         v.assembler.pushFinal(text, onAssembledTurn);
       }
@@ -934,6 +1159,10 @@
     // Incomplete speech from a session that is no longer listening is dropped.
     if (!v.active || v.paused || v.phase === "muted") return;
 
+    // The gate can close while a burst window is still open (she started
+    // answering an earlier turn). Whatever is in the buffer is then suspect.
+    if (v.gate === "held") { v.stats.gated++; renderDiag(); return; }
+
     var now = Date.now();
     if (v.echo.isEcho(text, now)) {
       v.stats.echoes++;
@@ -949,9 +1178,24 @@
     }
     v.dedupe.remember(text, now);
 
+    // Structural backstop against any feedback path we have not thought of:
+    // real speech cannot sustain this rate, so tripping it means something is
+    // talking to itself. Stop voice instead of flooding Gateway.
+    v.recentTurns.push(now);
+    v.recentTurns = v.recentTurns.filter(function (at) {
+      return (now - at) < TURN_BREAKER_WINDOW_MS;
+    });
+    if (v.recentTurns.length > TURN_BREAKER_MAX) {
+      v.stats.breaker++;
+      endVoice(true);
+      addMsg("system", t("loopGuard"));
+      renderVoice();
+      return;
+    }
+
     touchIdle();
-    // Barge-in: an answer already in flight or being spoken is superseded.
-    if (v.phase === "speaking" || v.phase === "thinking") {
+    // An answer still in flight is superseded by this new turn.
+    if (v.phase === "thinking") {
       stopSpeaking();
       v.turnSeq++;                       // discard the superseded answer
     }
@@ -973,6 +1217,10 @@
     v.dedupe.reset();
     v.echo.clear();
     v.assembler.discard();
+    clearGateTimer();
+    v.gate = "open";
+    v.ttsEpoch++;
+    v.recentTurns = [];
     v.stopping = false;
     v.paused = false;
 
@@ -1006,6 +1254,9 @@
       v.turnSeq++;
       // Half-spoken words captured before the tap are discarded, not sent.
       v.assembler.discard();
+      clearGateTimer();
+      v.ttsEpoch++;                      // orphan any pending gate release
+      v.gate = "open";
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       if (v.rec) { try { v.rec.abort(); } catch (e) {} }
       v.rec = null;                      // any late callback is now stale
@@ -1014,6 +1265,9 @@
       v.paused = false;
       v.dedupe.reset();
       v.assembler.discard();
+      clearGateTimer();
+      v.gate = "open";
+      v.ttsEpoch++;
       try { v.rec = buildRecognizer(); v.rec.start(); setPhase("listening"); touchIdle(); }
       catch (e) { failVoice(t("voiceFailed")); }
     }
@@ -1030,6 +1284,10 @@
     stopSpeaking();
     // Anything still buffered mid-sentence dies with the session.
     v.assembler.discard();
+    clearGateTimer();
+    v.ttsEpoch++;                        // orphan any pending gate release
+    v.gate = "open";
+    v.recentTurns = [];
     if (v.rec) { try { v.rec.abort(); } catch (e) { try { v.rec.stop(); } catch (e2) {} } }
     v.rec = null;
     v.echo.clear();
