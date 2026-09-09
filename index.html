@@ -392,14 +392,115 @@
   }
 
   // ---- Speech synthesis (spoken responses) ----
+  // Android Chrome will silently drop an utterance that is queued in the same
+  // task as a cancel(), so every speak() goes through a short deferred restart
+  // instead of cancel()-then-speak() back to back.
+  var SPEAK_RESTART_DELAY_MS = 180;
+  var speakTimerHandle = null;
+  var speaking = false;
+  var cachedVoices = [];
+
+  function refreshVoices() {
+    try {
+      cachedVoices = window.speechSynthesis.getVoices() || [];
+    } catch (e) {
+      cachedVoices = [];
+    }
+  }
+
+  if ("speechSynthesis" in window) {
+    refreshVoices();
+    try {
+      if (typeof window.speechSynthesis.addEventListener === "function") {
+        window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+      } else {
+        window.speechSynthesis.onvoiceschanged = refreshVoices;
+      }
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function preferredLocale() {
+    return state.lang === "es" ? "es-ES" : "en-US";
+  }
+
+  // Exact locale first, then a language-prefix match. Most Android devices ship
+  // es-MX / es-US / en-GB but not the exact locale we ask for; without the
+  // prefix fallback the engine silently falls back to the *device* default
+  // voice, which reads Spanish text with an English voice (or stays mute).
+  function pickVoice(locale) {
+    if (!cachedVoices.length) refreshVoices();
+    if (!cachedVoices.length) return null;
+
+    var wanted = String(locale).toLowerCase().replace("_", "-");
+    var prefix = wanted.split("-")[0];
+    var i, v, lang;
+
+    for (i = 0; i < cachedVoices.length; i++) {
+      v = cachedVoices[i];
+      lang = String(v.lang || "").toLowerCase().replace("_", "-");
+      if (lang === wanted) return v;
+    }
+    for (i = 0; i < cachedVoices.length; i++) {
+      v = cachedVoices[i];
+      lang = String(v.lang || "").toLowerCase().replace("_", "-");
+      if (lang === prefix || lang.indexOf(prefix + "-") === 0) return v;
+    }
+    return null;
+  }
+
+  function isSpeakingNow() {
+    if (!("speechSynthesis" in window)) return false;
+    try {
+      return !!(speaking || window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    } catch (e) {
+      return speaking;
+    }
+  }
+
+  function stopSpeaking() {
+    if (!("speechSynthesis" in window)) return;
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    speaking = false;
+    try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+  }
+
   function speak(text) {
     if (!text || !("speechSynthesis" in window)) return;
+
+    // Never speak with an open microphone: an active recognition session would
+    // otherwise transcribe Panchita's own voice straight back as user input.
+    stopRecognition();
+
+    var needsCancel = false;
     try {
-      window.speechSynthesis.cancel();
-      var u = new SpeechSynthesisUtterance(text);
-      u.lang = state.lang === "es" ? "es-ES" : "en-US";
-      window.speechSynthesis.speak(u);
-    } catch (e) { /* non-fatal */ }
+      needsCancel = !!(window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    } catch (e) { needsCancel = false; }
+
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    if (needsCancel) {
+      try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+    }
+
+    speakTimerHandle = setTimeout(function () {
+      speakTimerHandle = null;
+      try {
+        var u = new SpeechSynthesisUtterance(text);
+        var locale = preferredLocale();
+        var voice = pickVoice(locale);
+        if (voice) {
+          u.voice = voice;
+          u.lang = voice.lang || locale;
+        } else {
+          u.lang = locale;
+        }
+        speaking = true;
+        u.onend = function () { speaking = false; };
+        u.onerror = function () { speaking = false; };
+        window.speechSynthesis.speak(u);
+      } catch (e) {
+        speaking = false;
+      }
+    }, needsCancel ? SPEAK_RESTART_DELAY_MS : 0);
   }
 
   // ---- Sending a message ----
@@ -471,6 +572,89 @@
   var listening = false;
   var starting = false;
   var activeRecognizer = null;
+
+  // ---- Push-to-talk turn lifecycle ----
+  // Android Chrome often never fires its own end-of-speech detection, leaving
+  // the recogniser open until the user taps again, so the app does its own
+  // endpointing and enforces a hard ceiling on a single turn.
+  var SILENCE_MS = 1800;
+  var MAX_TURN_MS = 15000;
+  var silenceTimerHandle = null;
+  var maxTurnTimerHandle = null;
+  var turnSubmitted = false;
+  var turnAborted = false;
+  var latestTranscript = "";
+
+  function clearTurnTimers() {
+    if (silenceTimerHandle) { clearTimeout(silenceTimerHandle); silenceTimerHandle = null; }
+    if (maxTurnTimerHandle) { clearTimeout(maxTurnTimerHandle); maxTurnTimerHandle = null; }
+  }
+
+  // Ask the recogniser to finalise what it has; the result (or onend) then goes
+  // through submitTurn() like any other completion path.
+  function endTurnNow() {
+    if (!activeRecognizer) return;
+    try { activeRecognizer.stop(); } catch (e) { /* ignore */ }
+  }
+
+  // Re-armed on every speech/result event, so it only fires after real silence.
+  function armSilenceTimer() {
+    if (silenceTimerHandle) clearTimeout(silenceTimerHandle);
+    silenceTimerHandle = setTimeout(function () {
+      silenceTimerHandle = null;
+      endTurnNow();
+    }, SILENCE_MS);
+  }
+
+  // Absolute failsafe for a recogniser that never ends on its own.
+  function armMaxTurnTimer() {
+    if (maxTurnTimerHandle) clearTimeout(maxTurnTimerHandle);
+    maxTurnTimerHandle = setTimeout(function () {
+      maxTurnTimerHandle = null;
+      endTurnNow();
+    }, MAX_TURN_MS);
+  }
+
+  function beginTurn() {
+    clearTurnTimers();
+    turnSubmitted = false;
+    turnAborted = false;
+    latestTranscript = "";
+  }
+
+  // Exactly one submission per microphone turn, whichever path gets there first
+  // (final result, silence endpointing, max-duration failsafe, or onend).
+  function submitTurn(text) {
+    if (turnSubmitted || turnAborted) return;
+    turnSubmitted = true;
+    clearTurnTimers();
+    var finalText = (text || "").trim();
+    if (finalText) {
+      clearDiag();
+      sendMessage(finalText);
+    } else {
+      chatHint.textContent = t("emptySubmit");
+      setTimeout(function () { chatHint.textContent = " "; }, 2500);
+    }
+  }
+
+  // Hard stop with no submission -- used before Panchita speaks and on barge-in.
+  function stopRecognition() {
+    if (!activeRecognizer) return;
+    var r = activeRecognizer;
+    turnAborted = true;
+    clearTurnTimers();
+    activeRecognizer = null;
+    listening = false;
+    starting = false;
+    if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
+    micBtn.classList.remove("listening");
+    try {
+      r.abort();
+    } catch (e) {
+      try { r.stop(); } catch (e2) { /* ignore */ }
+    }
+  }
 
   var VOICE_MSG = {
     es: {
@@ -549,13 +733,24 @@
       if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
       micBtn.classList.add("listening");
       chatHint.textContent = VOICE_MSG[state.lang].listening;
+      armSilenceTimer();
+      armMaxTurnTimer();
     };
+    r.onaudiostart = function () { armSilenceTimer(); };
+    r.onspeechstart = function () { armSilenceTimer(); };
     r.onend = function () {
       listening = false;
       starting = false;
       diag.onendFired = true;
+      clearTurnTimers();
       if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
       micBtn.classList.remove("listening");
+      // Endpointing fallback: the turn ended (silence timer, max-duration
+      // failsafe, or the engine itself) without ever delivering a final
+      // result. Send the best interim transcript rather than losing the turn.
+      if (!turnSubmitted && !turnAborted && latestTranscript.trim()) {
+        submitTurn(latestTranscript);
+      }
       if (chatHint.textContent === VOICE_MSG.es.listening || chatHint.textContent === VOICE_MSG.en.listening) {
         chatHint.textContent = " ";
       }
@@ -569,6 +764,7 @@
     r.onerror = function (event) {
       listening = false;
       starting = false;
+      clearTurnTimers();
       diag.errorCode = (event && event.error) ? event.error : "(unknown)";
       if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
       micBtn.classList.remove("listening");
@@ -597,15 +793,12 @@
         if (event.results[i].isFinal) isFinal = true;
       }
       textInput.value = transcript;
+      latestTranscript = transcript;
       if (isFinal) {
-        var finalText = transcript.trim();
-        if (finalText) {
-          clearDiag();
-          sendMessage(finalText);
-        } else {
-          chatHint.textContent = t("emptySubmit");
-          setTimeout(function () { chatHint.textContent = " "; }, 2500);
-        }
+        submitTurn(transcript);
+      } else {
+        // Speech is still coming in -- push the silence deadline back.
+        armSilenceTimer();
       }
     };
     return r;
@@ -684,8 +877,14 @@
       chatHint.textContent = VOICE_MSG[state.lang].notSupported;
       return;
     }
+    // Manual barge-in: tapping the mic while Panchita is talking silences her
+    // first, so the microphone never hears -- and transcribes -- her own voice.
+    if (isSpeakingNow()) {
+      stopSpeaking();
+    }
     if (listening || starting) {
       // Already mid-turn -- stop it rather than starting a second one on top.
+      clearTurnTimers();
       if (activeRecognizer) {
         try { activeRecognizer.stop(); } catch (e) { /* ignore */ }
       }
@@ -693,6 +892,7 @@
     }
     clearDiag();
     diag = freshDiag();
+    beginTurn();
     runContextProbeThenRecognize();
   });
 
