@@ -233,9 +233,10 @@ function createApp(opts) {
   sandbox.navigator = {
     mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => [] }) }
   };
+  const visibilityHandlers = [];
   sandbox.document = {
     visibilityState: "visible",
-    addEventListener() {},
+    addEventListener(type, fn) { if (type === "visibilitychange") visibilityHandlers.push(fn); },
     getElementById: getEl,
     querySelectorAll: (sel) => (sel === ".screen" ? [getEl("login-screen"), getEl("chat-screen")] : []),
     createElement: () => makeEl("created")
@@ -286,6 +287,18 @@ function createApp(opts) {
     },
     stat(name) { return Number(api.diag()[name]); },
     phase() { return api.diag()["phase"]; },
+    /* The composite state the engine reports: LISTENING, USER_SPEAKING,
+       USER_PAUSED, ASSISTANT_SPEAKING, MANUALLY_MUTED, THINKING, OFF. */
+    state() { return api.diag()["state"]; },
+    muted() { return api.diag()["manually muted"] === "true"; },
+    buffered() { return JSON.parse(api.diag()["turn buffered"] || '""'); },
+    /* Drive the page the way a browser does when the screen dims or the
+       notification shade opens. */
+    setVisibility(v) {
+      sandbox.document.visibilityState = v;
+      (visibilityHandlers || []).forEach((fn) => fn({}));
+      return flush(clock);
+    },
     voiceActive() { return api.diag()["voice active"] === "true"; },
     loggedIn() { return getEl("chat-screen").classes.has("active"); },
     messages() { return getEl("messages").children.map((c) => c.className + "|" + c.textContent); },

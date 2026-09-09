@@ -70,10 +70,27 @@ extra turns`.
 Verified against the pre-fix page: 15 of these fail, including
 `expected 1 submission, got 4` — the reported Android behaviour.
 
+## Turn taking and microphone state (reproduced on Luis's phone)
+
+`voice-v2-turn-taking.test.js` mirrors the six physical phone tests one-for-one.
+
+| Phone test | Test |
+| --- | --- |
+| 1. One long continuous sentence | "TEST 1: a long continuous sentence is captured whole" |
+| 2. ~1s pause mid-sentence | "TEST 2: a one-second pause mid-sentence does NOT end the turn" |
+| 3. ~2s silence after finishing | "TEST 3: two seconds of genuine silence does end the turn" |
+| 4. Interrupt her mid-answer | "TEST 4: interrupting Panchita stops her AND keeps the interruption" |
+| 5. Two thinking pauses / barge-in twice | "TEST 5: two pauses…", "TEST 5b: barge-in works twice…" |
+| 6. Next turn still works | "TEST 6: after all of that the next turn works normally" |
+| SILENCIADO is never automatic | "backgrounding the page does NOT mute…", "Panchita speaking never shows as SILENCIADO", "the assistant-speaking and muted axes are independent" |
+
+Verified against the previous deployment: 8 of these 13 fail there, including
+`Panchita answered during the pause: ["Quiero que me ayudes con"]` and
+backgrounding the page showing `SILENCIADO` — the two reported symptoms.
+
 ## What these tests do NOT prove
 
-They do not prove the **long natural-pause** problem is solved. `FINAL_COALESCE_MS`
-coalesces Android's rapid cumulative final hypotheses; it is not an
-end-of-turn timer and must not be raised to mask a long pause. End-of-turn
-still comes from the recogniser's own endpointer. That behaviour can only be
-judged on real Android hardware.
+They model an engine, not a room. Pause tolerance, how promptly barge-in
+feels, and whether the silence grace period is well judged for how Luis
+actually speaks are all properties of real audio on real hardware. The
+1500ms grace is a starting point to tune from, not a verified value.

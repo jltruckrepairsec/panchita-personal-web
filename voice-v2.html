@@ -67,8 +67,38 @@
       the first word or two he speaks over her is not captured; that is the
       deliberate price of the invariant.
 
-  STILL OPEN: the long natural-pause problem is NOT solved here and must be
-  verified physically on Android hardware.
+    * TURN TAKING AND MICROPHONE STATE (this revision). Two more real-phone
+      bugs, fixed together because they share a state machine.
+
+      (1) Panchita cut Luis off mid-sentence. Android finalises a hypothesis
+      at every natural pause, and a finished final flushed the turn shortly
+      after, so "Quiero que me ayudes con... las citas de manana" was sent as
+      "Quiero que me ayudes con". End of turn is now a resettable silence
+      grace period (TURN_SILENCE_MS), re-armed by ANY sign of continuing
+      speech -- interim hypotheses and onspeechstart included, not only
+      finals. The engine's own endpointer is advisory and never ends a turn.
+      Unfinalised words are carried across a recogniser restart so a mid
+      sentence restart cannot lose them.
+
+      (2) The UI dropped into SILENCIADO on its own. A visibilitychange
+      handler called toggleMute(), and Android fires visibilitychange for a
+      screen dim, the notification shade and audio focus changes during TTS.
+      Muting is now a USER decision and nothing else can set it: phase (what
+      the assistant is doing) and muted (what Luis chose) are independent
+      axes, and backgrounding releases the recogniser without touching the
+      mute state or the UI.
+
+      Barge-in no longer costs Luis his opening words. What he says over her
+      is held in quarantine rather than discarded, and released into the turn
+      once her speaker is quiet, so the whole interruption arrives as one
+      turn. Two structural proofs keep her own audio out: a hypothesis heard
+      more than HUMAN_CONFIRM_LAG_MS after her speaker died cannot be hers,
+      and an unproven quarantine is seeded UNARMED so only Luis carrying on
+      talking can release it.
+
+  STILL OPEN: everything above is verified offline only. Turn taking, pause
+  tolerance and barge-in capture are judgements about real speech on real
+  hardware and must be confirmed physically on Android.
 
   COST: $0. No API key, no new vendor, no new data processor. Web Speech and
   speechSynthesis are the same free browser capabilities production already
@@ -287,8 +317,35 @@
   // over a long natural pause: end-of-turn still comes from the recogniser's
   // own endpointer (result.isFinal). This value only decides how long we wait
   // to see whether the SAME hypothesis is about to be restated one word longer.
-  // PROVISIONAL: pending physical Android verification.
-  var FINAL_COALESCE_MS = 400;
+  // REVISED after real-phone testing: 400ms cut Luis off mid-sentence.
+  // Android's endpointer finalises a hypothesis at every natural pause, so a
+  // short flush delay after a final turned "Quiero que me ayudes con... las
+  // citas de manana" into "Quiero que me ayudes con". This is now a genuine
+  // conversational silence grace period, and it is reset by ANY speech
+  // activity -- interim hypotheses and onspeechstart included, not just
+  // finals -- so it only elapses when Luis has really stopped talking.
+  //
+  // It does not add latency to a finished turn beyond this window, because
+  // nothing waits on it except the decision that he is done.
+  var TURN_SILENCE_MS = 1500;
+
+  // A stuck interim stream must not hold a turn open forever.
+  var TURN_MAX_MS = 20000;
+
+  // An interruption shorter than this many words is not released on its own
+  // (see the barge-in quarantine below): a lone short word is the classic
+  // self-echo leak, and a one-word interruption carries no request anyway.
+  var PREFIX_MIN_WORDS = 2;
+
+  // How long a carried interruption waits for Luis to carry on talking before
+  // it is dropped as not-a-human. Long enough to bridge the speaker tail and
+  // a breath, short enough that a stray fragment never lingers.
+  var PREFIX_GRACE_MS = 1200;
+
+  // A hypothesis arriving this long after her speaker actually went quiet
+  // cannot be her: her audio is gone, and engine processing lag is far shorter
+  // than this. It is the proof that the voice being quarantined is a person's.
+  var HUMAN_CONFIRM_LAG_MS = 300;
 
   // --- Self-echo containment (the loudspeaker feedback loop) --------------
   // On a real Android phone the loudspeaker feeds straight back into the open
@@ -314,7 +371,7 @@
   // runaway long before it reaches the Gateway message limit.
   //
   // The gate, not this, is what makes self-echo submission impossible.
-  var TURN_BREAKER_MAX = 25;
+  var TURN_BREAKER_MAX = 20;
   var TURN_BREAKER_WINDOW_MS = 20000;
 
   // NOTE: there is deliberately NO fixed silence timer. End-of-turn comes from
@@ -429,6 +486,12 @@
         }
         return false;
       },
+      // Re-stamp the newest entry. speak() records her text when the utterance
+      // is queued, but a long answer is still playing many seconds later, so
+      // the window has to run from when she FINISHED, not when she started.
+      refresh: function (now) {
+        if (spoken.length) spoken[spoken.length - 1].at = now;
+      },
       clear: function () { spoken = []; }
     };
   }
@@ -467,33 +530,78 @@
   //     emit, so mute, End voice and a stale recogniser submit nothing.
   // Timer functions are injectable so the offline suite can drive this
   // deterministically without wall-clock waits.
-  function createTurnAssembler(coalesceMs, opts) {
+  function createTurnAssembler(silenceMs, opts) {
     var o = opts || {};
     var setT = o.setTimeout || function (fn, ms) { return setTimeout(fn, ms); };
     var clrT = o.clearTimeout || function (id) { return clearTimeout(id); };
+    var now = o.now || function () { return Date.now(); };
+    var maxMs = o.maxMs || 0;
     var buffer = "";
     var timer = null;
+    var startedAt = 0;
+    var handler = null;
 
     function cancelTimer() {
       if (timer !== null) { try { clrT(timer); } catch (e) {} timer = null; }
     }
 
+    function emit() {
+      timer = null;
+      var out = buffer;
+      buffer = "";
+      startedAt = 0;
+      var fn = handler;
+      handler = null;
+      if (out && typeof fn === "function") fn(out);
+    }
+
+    // Restart the silence window. Called by every sign of continuing speech.
+    function arm(onTurn) {
+      if (typeof onTurn === "function") handler = onTurn;
+      if (!startedAt) startedAt = now();
+      cancelTimer();
+      var wait = silenceMs;
+      if (maxMs) {
+        var left = (startedAt + maxMs) - now();
+        if (left <= 0) { emit(); return; }
+        if (left < wait) wait = left;
+      }
+      timer = setT(emit, wait);
+    }
+
     return {
-      // Accepts ONE final hypothesis of the turn currently being spoken.
+      // ONE final hypothesis of the turn currently being spoken.
       pushFinal: function (text, onTurn) {
         var incoming = String(text || "").trim();
         if (!incoming) return;
         buffer = mergeFinalHypotheses(buffer, incoming);
-        cancelTimer();
-        timer = setT(function () {
-          timer = null;
-          var out = buffer;
-          buffer = "";
-          if (out && typeof onTurn === "function") onTurn(out);
-        }, coalesceMs);
+        arm(onTurn);
       },
-      // Incomplete speech is thrown away, never submitted.
-      discard: function () { cancelTimer(); buffer = ""; },
+      // Speech is still happening but has not been finalised yet: an interim
+      // hypothesis, or the recogniser reporting speech onset. Restarts the
+      // silence window WITHOUT adding anything to the turn, so a natural pause
+      // mid-sentence never ends the turn while Luis is still talking.
+      touch: function (onTurn) {
+        if (!buffer && !startedAt) return;   // nothing in flight to extend
+        arm(onTurn);
+      },
+      // Seed the buffer without starting the clock. Used to carry an
+      // interruption across the TTS gate, and to recover an unfinalised
+      // interim when Android restarts the recogniser mid-sentence.
+      seed: function (text) {
+        var incoming = String(text || "").trim();
+        if (!incoming) return;
+        buffer = mergeFinalHypotheses(buffer, incoming);
+      },
+      // Seed AND start the clock, for a turn already under way.
+      resume: function (text, onTurn) {
+        this.seed(text);
+        if (buffer) arm(onTurn);
+      },
+      discard: function () { cancelTimer(); buffer = ""; startedAt = 0; handler = null; },
+      // Is a submission actually pending? A buffer seeded across the TTS gate
+      // is NOT armed until real speech follows it.
+      isArmed: function () { return timer !== null; },
       hasPending: function () { return buffer.length > 0; },
       peek: function () { return buffer; }
     };
@@ -529,10 +637,23 @@
 
   var v = {
     active: false,
-    phase: "off",          // off | listening | thinking | speaking | muted
+    // ---- THE TWO INDEPENDENT AXES ----------------------------------------
+    // phase is what the ASSISTANT is doing. muted is what the USER chose.
+    // They are orthogonal on purpose: Panchita speaking must never present as
+    // a muted microphone, and the microphone stays available for barge-in for
+    // the whole time she is talking.
+    phase: "off",          // off | listening | thinking | speaking
+    muted: false,          // true ONLY from a Silenciar tap or a device fault
+    backgrounded: false,   // page hidden: mic released, mute state untouched
+    userSpeaking: false,   // the recogniser is hearing Luis right now
+    lastInterim: "",       // unfinalised words, kept so a restart cannot lose them
+    quarantine: "",        // an interruption heard while her speaker was live
+    quarantineAt: 0,
+    quarantineConfirmed: false,   // proven human: heard after her speaker died
+    speakerStoppedAt: 0,
+    prefixTimer: null,
     rec: null,
     stopping: false,
-    paused: false,
     restartTimer: null,
     idleTimer: null,
     maxTimer: null,
@@ -541,13 +662,14 @@
     speakTimer: null,
     dedupe: createDedupe(DUP_WINDOW_MS, 12),
     echo: createEchoGuard(ECHO_WINDOW_MS),
-    assembler: createTurnAssembler(FINAL_COALESCE_MS),
+    assembler: createTurnAssembler(TURN_SILENCE_MS, { maxMs: TURN_MAX_MS }),
     gate: "open",          // open | held  -- held whenever her speaker is live
     ttsEpoch: 0,
     gateTimer: null,
     recentTurns: [],
     stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0,
-             stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0 }
+             stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0,
+             carried: 0, prefixDropped: 0, onsets: 0 }
   };
 
   var STR = {
@@ -629,7 +751,7 @@
     d["text-input"].placeholder = t("textPlaceholder");
     d["lang-es"].classList.toggle("active", state.lang === "es");
     d["lang-en"].classList.toggle("active", state.lang === "en");
-    d["v-mute"].textContent = (v.phase === "muted") ? t("bUnmute") : t("bMute");
+    d["v-mute"].textContent = v.muted ? t("bUnmute") : t("bMute");
     d["v-end"].textContent = t("bEnd");
     renderVoice();
   }
@@ -672,23 +794,39 @@
 
   function renderVoice() {
     d["voice-bar"].classList.toggle("visible", v.active);
-    d["mic-btn"].classList.toggle("listening", v.active && v.phase !== "muted");
+    d["mic-btn"].classList.toggle("listening", v.active && !v.muted);
     var map = {
       listening: ["sListening", "listening"], thinking: ["sThinking", "thinking"],
-      speaking: ["sSpeaking", "speaking"], muted: ["sMuted", "muted"], off: ["sListening", ""]
+      speaking: ["sSpeaking", "speaking"], off: ["sListening", ""]
     };
-    var m = map[v.phase] || map.off;
+    // SILENCIADO is a USER state, not an assistant state. It is shown only
+    // when Luis muted the microphone himself, never because Panchita happens
+    // to be speaking.
+    var m = v.muted ? ["sMuted", "muted"] : (map[v.phase] || map.off);
     d["v-state"].textContent = t(m[0]);
     d["v-state"].className = "v-state" + (m[1] ? " " + m[1] : "");
-    d["v-mute"].textContent = (v.phase === "muted") ? t("bUnmute") : t("bMute");
-    d["v-mute"].classList.toggle("on", v.phase === "muted");
+    d["v-mute"].textContent = v.muted ? t("bUnmute") : t("bMute");
+    d["v-mute"].classList.toggle("on", v.muted);
     if (!v.active) d["chat-hint"].textContent = t("hintVoiceOff");
-    else if (v.phase === "muted") d["chat-hint"].textContent = t("hintMuted");
+    else if (v.muted) d["chat-hint"].textContent = t("hintMuted");
     else d["chat-hint"].textContent = t("hintVoiceOn");
     renderDiag();
   }
 
   function setPhase(p) { v.phase = p; renderVoice(); }
+
+  // The five states the voice engine can be in, derived from the two axes.
+  // USER_PAUSED is emphatically NOT USER_FINISHED: it means a silence window
+  // is open and Luis may still be mid-sentence.
+  function voiceState() {
+    if (!v.active) return "OFF";
+    if (v.muted) return "MANUALLY_MUTED";
+    if (v.phase === "speaking") return "ASSISTANT_SPEAKING";
+    if (v.userSpeaking) return "USER_SPEAKING";
+    if (v.assembler.hasPending()) return "USER_PAUSED";
+    if (v.phase === "thinking") return "THINKING";
+    return "LISTENING";
+  }
 
   var diagVisible = false;
   d["diag-toggle"].addEventListener("click", function () {
@@ -707,6 +845,17 @@
       "echoes suppressed: " + v.stats.echoes,
       "recogniser restarts: " + v.stats.restarts,
       "errors: " + v.stats.errors,
+      "state: " + voiceState(),
+      "assistant speaking: " + (v.phase === "speaking"),
+      "user speaking: " + v.userSpeaking,
+      "manually muted: " + v.muted,
+      "turn buffered: " + JSON.stringify(v.assembler.peek()),
+      "silence grace: " + TURN_SILENCE_MS + "ms (resets on speech)",
+      "interruption held: " + JSON.stringify(v.quarantine),
+      "interruption confirmed: " + v.quarantineConfirmed,
+      "speaker stopped at: " + (v.speakerStoppedAt ? (Date.now() - v.speakerStoppedAt) + "ms ago" : "n/a"),
+      "interruptions carried: " + v.stats.carried,
+      "interruptions dropped: " + v.stats.prefixDropped,
       "tts gate: " + v.gate,
       "gated while she spoke: " + v.stats.gated,
       "barge-ins: " + v.stats.bargeIns,
@@ -715,8 +864,8 @@
       "interims ignored: " + v.stats.interims,
       "finals coalesced: " + v.stats.coalesced,
       "stale callbacks ignored: " + v.stats.stale,
-      "fixed silence timer: NONE (engine endpointing)",
-      "final-burst coalesce: " + FINAL_COALESCE_MS + "ms (not end-of-turn)"
+      "engine endpointing: advisory only (never ends a turn)",
+      "turn max: " + TURN_MAX_MS + "ms"
     ].join("\n");
   }
 
@@ -893,6 +1042,11 @@
       if (!v.active) { openGate(epoch, false); return; }
       var now = Date.now();
       if ((now < notBefore || speakerBusy()) && now < deadline) {
+        // She is STILL talking. Keep her words echo-fresh: the window has to
+        // cover the whole utterance, and a long answer outlives ECHO_WINDOW_MS
+        // several times over. Without this her own later sentences stop
+        // matching and get mistaken for Luis interrupting.
+        v.echo.refresh(now);
         v.gateTimer = setTimeout(poll, TTS_POLL_MS);
         return;
       }
@@ -909,40 +1063,132 @@
   // while she spoke is aborted and dropped, so anything it captured from the
   // loudspeaker dies with it and its queued callbacks are stale by identity.
   // A fresh recogniser then listens to a quiet room.
+  // ---- Carrying an interruption across the gate ---------------------------
+  // Barge-in used to cost Luis his opening words: what he said over her was
+  // barred from submission and thrown away, so he had to start again. It is
+  // now held here instead. The gate still refuses to SUBMIT it while her
+  // speaker is live; when the speaker goes quiet the words are released into
+  // the turn, so "Espera, quiero preguntarte otra cosa" arrives whole.
+  //
+  // What keeps this safe is structural, not textual: her audio cannot go on
+  // producing speech once her speaker is off.
+  function rememberInterruption(text, now) {
+    var merged = mergeFinalHypotheses(v.quarantine, text);
+    if (!merged) return;
+    v.quarantine = merged;
+    v.quarantineAt = now || Date.now();
+  }
+
+  function clearInterruption() {
+    v.quarantine = ""; v.quarantineAt = 0; v.quarantineConfirmed = false;
+  }
+
+  // Called for every hypothesis heard while the gate is held. If her speaker
+  // has already been quiet for longer than the engine's processing lag, the
+  // voice still being transcribed is a person's -- she cannot produce audio
+  // she is no longer playing. This is what lets a complete interruption
+  // ("Espera, todavia no termino") be kept even when Luis then falls silent.
+  function confirmHumanIfSpeakerDead(now) {
+    if (v.quarantineConfirmed) return;
+    if (speakerBusy()) return;
+    if (!v.speakerStoppedAt) return;
+    if ((now - v.speakerStoppedAt) >= HUMAN_CONFIRM_LAG_MS) v.quarantineConfirmed = true;
+  }
+
+  // A lone short word is the shape a self-echo leak takes, and carries no
+  // request anyway, so it is never released on its own.
+  function releasableInterruption() {
+    var text = String(v.quarantine || "").trim();
+    if (!text) return "";
+    var n = normalizeSpeech(text);
+    if (!n) return "";
+    if (n.split(" ").length < PREFIX_MIN_WORDS) return "";
+    if (v.echo.isEcho(text, Date.now())) return "";
+    return text;
+  }
+
   function openGate(epoch, resetMic) {
     if (epoch !== undefined && epoch !== v.ttsEpoch) return;
     clearGateTimer();
-    if (resetMic && v.active && !v.paused && !v.stopping) {
+
+    // What, if anything, Luis said over her, and whether we can prove it was
+    // a person (heard after her speaker had already gone quiet).
+    var carried = releasableInterruption();
+    var confirmed = v.quarantineConfirmed;
+    clearInterruption();
+    if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
+
+    // A confirmed interruption means Luis is MID-SENTENCE right now. Cutting
+    // his microphone to reset it would drop the rest of what he is saying --
+    // the very words the reset exists to protect. So the reset is skipped in
+    // exactly that case, and taken otherwise (a pure self-echo storm, where
+    // dropping whatever the recogniser captured from her speaker is the point).
+    var speaking = confirmed && carried;
+    var doReset = resetMic && !speaking && v.active && !v.muted && !v.stopping;
+
+    if (doReset) {
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       var old = v.rec;
-      v.rec = null;                                // drop ownership FIRST, so the
-      if (old) { try { old.abort(); } catch (e) { /* non-fatal */ } }  // onend abort()
-      v.assembler.discard();                       // fires with is already stale
+      v.rec = null;                       // drop ownership FIRST, so the onend
+      if (old) { try { old.abort(); } catch (e) {} }   // abort() fires is stale
       v.stats.micResets++;
+    }
+    v.assembler.discard();
+
+    if (carried && confirmed) {
+      // Proven human. It becomes an ordinary turn even if Luis stops talking
+      // now, and if he keeps going his next words merge into the same turn.
+      v.stats.carried++;
+      v.assembler.resume(carried, onAssembledTurn);
+    } else if (carried) {
+      // Not proven. Seed it UNARMED: on its own it can never be submitted.
+      // Only Luis carrying on talking releases it, which her audio cannot do
+      // once her speaker is off.
+      v.assembler.seed(carried);
+      v.prefixTimer = setTimeout(function () {
+        v.prefixTimer = null;
+        if (!v.assembler.isArmed()) {      // nobody kept talking: not a human
+          v.assembler.discard();
+          v.stats.prefixDropped++;
+          renderDiag();
+        } else {
+          v.stats.carried++;
+        }
+      }, PREFIX_GRACE_MS);
+    }
+
+    if (doReset) {
       // Android Chrome can refuse a start() issued straight after abort().
       // One retry on the normal restart delay; voice only fails if that fails
-      // too, because losing the session here would be worse than the echo.
+      // too, because losing the session would be worse than the echo.
       try { v.rec = buildRecognizer(); v.rec.start(); }
       catch (e) {
         v.rec = null;
         v.restartTimer = setTimeout(function () {
           v.restartTimer = null;
-          if (!v.active || v.stopping || v.paused || v.rec) return;
+          if (!v.active || v.stopping || v.muted || v.rec) return;
           try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
           catch (e2) { failVoice(t("voiceFailed")); }
           renderDiag();
         }, RESTART_DELAY_MS);
       }
-    } else {
-      v.assembler.discard();
     }
+
     v.gate = "open";
-    if (v.active && !v.paused && v.phase === "speaking") setPhase("listening");
+    v.echo.refresh(Date.now());   // her words stay echo-suspect from NOW
+    if (v.active && !v.muted && v.phase === "speaking") setPhase("listening");
     renderDiag();
   }
 
   function stopSpeaking() {
     v.speakGen++;
+    // Stamp the moment her speaker went quiet, ONCE per utterance. Barge-in
+    // calls this on every hypothesis while she is being interrupted, and
+    // re-stamping each time would keep the clock permanently young -- the
+    // "heard after her speaker died" proof could then never mature, and a
+    // real interruption would be discarded as unproven. speak() clears the
+    // stamp when she next makes sound.
+    if (!v.speakerStoppedAt) v.speakerStoppedAt = Date.now();
     if (v.speakTimer) { clearTimeout(v.speakTimer); v.speakTimer = null; }
     if ("speechSynthesis" in window) {
       try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
@@ -961,6 +1207,7 @@
     // Close the submission gate BEFORE any audio exists, and keep it closed
     // until she is measurably silent. This, not the echo guard, is what makes
     // her own loudspeaker output unable to become a turn.
+    v.speakerStoppedAt = 0;              // she is about to make sound again
     var epoch = holdGate();
     scheduleGateRelease(epoch, Date.now() + TTS_MIN_HOLD_MS);
 
@@ -1072,36 +1319,96 @@
     r.interimResults = true;
     r.lang = state.lang === "es" ? "es-ES" : "en-US";
 
+    // Speech onset. The earliest signal the engine gives us that Luis has
+    // started talking -- earlier than any transcript -- so it is what makes
+    // barge-in as prompt as this API allows, and it re-arms the silence window
+    // the instant he resumes after a pause.
+    r.onspeechstart = function () {
+      if (v.rec !== r) { v.stats.stale++; return; }
+      if (!v.active || v.muted) return;
+      v.userSpeaking = true;
+      touchIdle();
+      if (v.gate === "held") {
+        // NOT a barge-in signal on its own. Her own loudspeaker trips speech
+        // onset in the microphone just as a person does, so stopping here
+        // would make her cut herself off mid-answer. The decision waits for
+        // the first transcript -- see the interim branch in onresult, which is
+        // the earliest evidence this API gives that the voice is not hers.
+        v.stats.onsets++;
+      } else {
+        // Resuming mid-turn after a natural pause: keep the turn open.
+        v.assembler.touch(onAssembledTurn);
+      }
+      renderVoice();
+    };
+
+    // The engine thinks speech stopped. This is exactly the signal that was
+    // cutting Luis off, so it is NOT treated as end of turn -- it only marks
+    // him as paused. The resettable silence window decides when he is done.
+    r.onspeechend = function () {
+      if (v.rec !== r) { v.stats.stale++; return; }
+      v.userSpeaking = false;
+      renderVoice();
+    };
+
     r.onresult = function (ev) {
       // Stale-callback protection. A recogniser that has been aborted, replaced
       // on restart, muted or ended can still deliver queued events. Only the
       // recogniser this session currently owns may speak for it.
       if (v.rec !== r) { v.stats.stale++; return; }
-      if (!v.active || v.paused || v.phase === "muted") return;
+      if (!v.active || v.muted) return;
       var now = Date.now();
       // Continuous mode accumulates results; only walk the new ones.
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var res = ev.results[i];
-        // Interim hypotheses are counted and dropped. They are never buffered
-        // and can never reach Gateway.
-        if (!res.isFinal) { v.stats.interims++; continue; }
         var text = (res[0] && res[0].transcript) ? res[0].transcript : "";
         if (!text.trim()) continue;
 
-        // ---- THE GATE ----------------------------------------------------
+        // ---- INTERIM ------------------------------------------------------
+        // Never submitted, never merged into the turn. But it is proof that
+        // Luis is STILL TALKING, so it re-arms the silence window: this is
+        // what stops a natural mid-sentence pause from ending his turn. It is
+        // also retained so that words not yet finalised survive a recogniser
+        // restart instead of being dropped.
+        if (!res.isFinal) {
+          v.stats.interims++;
+          v.userSpeaking = true;
+          if (v.gate === "held") {
+            // Earliest safe barge-in: an unfinalised hypothesis that is not
+            // her words. This fires hundreds of milliseconds before the final
+            // would, and it is what makes her stop while Luis is still in his
+            // first phrase -- which in turn is what lets the rest of that
+            // phrase be captured instead of lost.
+            if (!v.echo.isLikelyEcho(text, now)) {
+              confirmHumanIfSpeakerDead(now);
+              rememberInterruption(text, now);
+              if (v.phase === "speaking" || speakerBusy()) {
+                v.stats.bargeIns++;
+                touchIdle();
+                stopSpeaking();
+              }
+            } else { v.stats.echoes++; }
+          } else {
+            v.lastInterim = text;
+            touchIdle();
+            v.assembler.touch(onAssembledTurn);
+          }
+          continue;
+        }
+
+        // ---- THE GATE -----------------------------------------------------
         // Her loudspeaker is live (or still ringing out). Nothing heard here
-        // may be buffered or submitted, whatever it says. The only thing a
-        // held transcript may do is interrupt her.
+        // may be submitted, whatever it says. It may stop her, and it is held
+        // in quarantine so an interruption is not lost.
         if (v.gate === "held") {
           v.stats.gated++;
-          // Echo matching is used ONLY to keep her from interrupting herself.
-          // It decides nothing about submission -- the gate already did that,
-          // so this side can afford to be lenient.
           if (v.echo.isLikelyEcho(text, now)) { v.stats.echoes++; }
           else {
+            confirmHumanIfSpeakerDead(now);
+            rememberInterruption(text, now);
             v.stats.bargeIns++;
             touchIdle();
-            stopSpeaking();     // she stops; the gate opens once she is silent
+            stopSpeaking();   // she stops; the gate opens once she is silent
           }
           renderDiag();
           continue;
@@ -1111,11 +1418,12 @@
         // turn buffer, as defence in depth behind the gate.
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
 
+        v.lastInterim = "";
         touchIdle();
         if (v.assembler.hasPending()) v.stats.coalesced++;
         v.assembler.pushFinal(text, onAssembledTurn);
       }
-      renderDiag();
+      renderVoice();
     };
 
     r.onerror = function (ev) {
@@ -1133,12 +1441,21 @@
       // Android Chrome ends continuous sessions on its own schedule. Reopening
       // is what keeps the microphone available for the whole conversation.
       if (v.rec !== r) { v.stats.stale++; return; }
-      if (!v.active || v.stopping || v.paused) return;
+      if (!v.active || v.stopping || v.muted) return;
+      v.userSpeaking = false;
+      // Android ends the session on its own schedule, sometimes mid-sentence
+      // and without finalising what it had. Fold the last interim into the
+      // turn so those words are not lost across the restart; the cumulative
+      // merge collapses it again if the engine re-states it afterwards.
+      if (v.gate !== "held" && v.lastInterim) {
+        v.assembler.resume(v.lastInterim, onAssembledTurn);
+        v.lastInterim = "";
+      }
       if (v.restartTimer) clearTimeout(v.restartTimer);
       v.restartTimer = setTimeout(function () {
         v.restartTimer = null;
         if (v.rec !== r) { v.stats.stale++; return; }
-        if (!v.active || v.stopping || v.paused) return;
+        if (!v.active || v.stopping || v.muted) return;
         v.stats.restarts++;
         try { v.rec.start(); }
         catch (e) {
@@ -1157,7 +1474,7 @@
   function onAssembledTurn(text) {
     // Voice may have been muted or ended while the burst window was open.
     // Incomplete speech from a session that is no longer listening is dropped.
-    if (!v.active || v.paused || v.phase === "muted") return;
+    if (!v.active || v.muted) return;
 
     // The gate can close while a burst window is still open (she started
     // answering an earlier turn). Whatever is in the buffer is then suspect.
@@ -1217,12 +1534,18 @@
     v.dedupe.reset();
     v.echo.clear();
     v.assembler.discard();
+    clearInterruption();
+    if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
+    v.lastInterim = "";
+    v.userSpeaking = false;
+    v.backgrounded = false;
+    v.muted = false;
     clearGateTimer();
     v.gate = "open";
     v.ttsEpoch++;
     v.recentTurns = [];
     v.stopping = false;
-    v.paused = false;
+    v.muted = false;
 
     // Probe permission first so a denial is reported clearly instead of
     // hanging silently, which is the known Android Chrome failure mode.
@@ -1248,23 +1571,31 @@
   // captured until Reactivar. The Panchita session is untouched.
   function toggleMute() {
     if (!v.active) return;
-    if (v.phase !== "muted") {
-      v.paused = true;
+    if (!v.muted) {
+      v.muted = true;
       stopSpeaking();
       v.turnSeq++;
       // Half-spoken words captured before the tap are discarded, not sent.
       v.assembler.discard();
+      clearInterruption();
+      v.lastInterim = "";
+      v.userSpeaking = false;
       clearGateTimer();
       v.ttsEpoch++;                      // orphan any pending gate release
       v.gate = "open";
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       if (v.rec) { try { v.rec.abort(); } catch (e) {} }
       v.rec = null;                      // any late callback is now stale
-      setPhase("muted");
+      v.muted = true;
+      setPhase("listening");           // phase is the assistant; mute is the user
+      renderVoice();
     } else {
-      v.paused = false;
+      v.muted = false;
       v.dedupe.reset();
       v.assembler.discard();
+      clearInterruption();
+      v.lastInterim = "";
+      v.userSpeaking = false;
       clearGateTimer();
       v.gate = "open";
       v.ttsEpoch++;
@@ -1279,11 +1610,17 @@
     var was = v.active;
     v.active = false;
     v.stopping = true;
-    v.paused = false;
+    v.muted = false;
     clearTimers();
     stopSpeaking();
     // Anything still buffered mid-sentence dies with the session.
     v.assembler.discard();
+    clearInterruption();
+    if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
+    v.lastInterim = "";
+    v.userSpeaking = false;
+    v.backgrounded = false;
+    v.muted = false;
     clearGateTimer();
     v.ttsEpoch++;                        // orphan any pending gate release
     v.gate = "open";
@@ -1336,13 +1673,43 @@
     if (!v.active) return;
     d["chat-hint"].textContent = t("reconnected");
     // Nudge the recogniser back to life; the onend loop handles the rest.
-    if (!v.paused && v.rec) { try { v.rec.abort(); } catch (e) {} }
+    if (!v.muted && v.rec) { try { v.rec.abort(); } catch (e) {} }
     setTimeout(renderVoice, 1500);
   });
 
-  // ---- Android: never claim to be listening while backgrounded ------------
+  // ---- Android: backgrounding is NOT a mute -------------------------------
+  // This used to call toggleMute() on visibilitychange, which is why the phone
+  // dropped into SILENCIADO / "Microfono silenciado" on its own: Android fires
+  // visibilitychange for a screen dim, the notification shade, and an audio
+  // focus change during TTS. Muting is a USER decision and nothing else may
+  // make it. Backgrounding now only releases the recogniser; the mute state,
+  // and therefore the UI, is untouched, and the microphone comes back by
+  // itself when the page is visible again.
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "hidden" && v.active && v.phase !== "muted") toggleMute();
+    if (!v.active || v.muted) return;
+    if (document.visibilityState === "hidden") {
+      v.backgrounded = true;
+      if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
+      var held = v.rec;
+      v.rec = null;                          // late callbacks are stale
+      if (held) { try { held.abort(); } catch (e) {} }
+      stopSpeaking();
+    } else if (v.backgrounded) {
+      v.backgrounded = false;
+      if (!v.rec) {
+        try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
+        catch (e) {
+          v.rec = null;
+          v.restartTimer = setTimeout(function () {
+            v.restartTimer = null;
+            if (!v.active || v.stopping || v.muted || v.rec) return;
+            try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
+            catch (e2) { failVoice(t("voiceFailed")); }
+          }, RESTART_DELAY_MS);
+        }
+      }
+      renderVoice();
+    }
   });
   window.addEventListener("pagehide", function () { endVoice(true); });
 

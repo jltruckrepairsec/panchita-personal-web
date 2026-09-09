@@ -19,8 +19,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { createApp } = require("./harness.js");
 
-const COALESCE_MS = 400;
-const TURN_BREAKER_MAX_EXPECTED = 25;
+const GRACE_MS = 1500;   // TURN_SILENCE_MS in voice-v2.html
+const TURN_BREAKER_MAX_EXPECTED = 20;
 
 /* The answer she speaks, and the fragments Android fed back from it. */
 const ANSWER = "Claro, dime en que te puedo ayudar. Aqui esta la orden del jueves.";
@@ -37,7 +37,7 @@ function answeringApp(answer) {
 
 async function askOnce(a, question) {
   a.current().emitAppend(question, true);
-  await a.settle(COALESCE_MS + 300);
+  await a.settle(GRACE_MS + 300);
 }
 
 /* -- The reproduction ----------------------------------------------------- */
@@ -123,7 +123,7 @@ test("REPRO: the acknowledgement she speaks while thinking cannot echo back eith
   await a.login();
   await a.startVoice();
   a.current().emitAppend("Cuanto debo", true);
-  await a.settle(COALESCE_MS + 100);          // ack is playing, answer not back yet
+  await a.settle(GRACE_MS + 100);          // ack is playing, answer not back yet
   for (const fragment of ["Dejame", "Dejame ver", "ver"]) {
     a.current().emitAppend(fragment, true);
     await a.settle(60);
@@ -143,7 +143,7 @@ test("nothing at all can be submitted while the loudspeaker is live", async () =
 
   // Words she never said, that no echo test could reject.
   a.current().emitAppend("cierra la orden del camion azul", true);
-  await a.settle(COALESCE_MS + 200);
+  await a.settle(GRACE_MS + 200);
   assert.strictEqual(a.turnRequests().length, 1, "the gate let a turn through while she spoke");
 });
 
@@ -168,7 +168,7 @@ test("a normal turn still works after the gate has opened", async () => {
   await askOnce(a, "Hola Panchita");
   await a.settle(8000);
   a.current().emitAppend("Cierra la orden del jueves", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
     ["Hola Panchita", "Cierra la orden del jueves"]);
 });
@@ -188,7 +188,7 @@ test("the gate never wedges shut when TTS never reports an end", async () => {
   await a.settle(8000);
   assert.strictEqual(a.gate(), "open", "the gate wedged shut with no onend");
   a.current().emitAppend("Cierra la orden", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.strictEqual(a.turnRequests().length, 2, "voice was dead after a missing onend");
 });
 
@@ -215,7 +215,7 @@ test("an interruption is followed by a normal turn once she is silent", async ()
   await a.settle(2000);
   assert.strictEqual(a.gate(), "open");
   a.current().emitAppend("mejor mandame la factura", true);
-  await a.settle(COALESCE_MS + 800);
+  await a.settle(GRACE_MS + 800);
   assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
     ["Hola Panchita", "mejor mandame la factura"]);
 });
@@ -247,7 +247,7 @@ test("the recogniser that was live during TTS cannot submit after the reset", as
   duringTts.emitAppend("Aqui esta la orden del jueves", true);   // late echo
   duringTts.fireEnd();
   duringTts.fireError("network");
-  await a.settle(COALESCE_MS + 2000);
+  await a.settle(GRACE_MS + 2000);
   assert.strictEqual(a.turnRequests().length, 1, "a stale recogniser submitted after TTS");
   assert.ok(a.stat("stale callbacks ignored") >= 1);
   assert.strictEqual(a.voiceActive(), true);
@@ -274,7 +274,7 @@ test("mute during TTS stops everything and submits nothing", async () => {
   for (const fragment of ECHO_FRAGMENTS) a.current().emitAppend(fragment, true);
   await a.settle(8000);
   assert.strictEqual(a.turnRequests().length, 1);
-  assert.strictEqual(a.phase(), "muted");
+  assert.strictEqual(a.state(), "MANUALLY_MUTED");
 });
 
 test("End voice during TTS stops everything and submits nothing", async () => {
@@ -300,7 +300,7 @@ test("unmuting after a muted TTS leaves the gate open and voice usable", async (
   await a.settle(1000);
   assert.strictEqual(a.gate(), "open");
   a.current().emitAppend("Cierra la orden", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.strictEqual(a.turnRequests().length, 2);
 });
 
@@ -318,11 +318,10 @@ test("self-echo cannot flood Gateway: 14 distinct fragments during her answer, s
   await askOnce(a, "Hola Panchita");
 
   const words = LONG.replace(/[^A-Za-z ]/g, "").split(/\s+/);
-  let cutOffAfter = -1;
+  let injected = 0;
   for (let i = 0; i < 14; i++) {
-    // Being cut off by her own audio is part of the reported bug, so record it
-    // and keep going rather than ending the test here.
-    if (cutOffAfter < 0 && !a.speaking()) cutOffAfter = i;
+    if (!a.speaking()) break;                        // her answer ended; loop over
+    injected++;
     // Alternate the short fragments that actually leaked on the phone with
     // longer slices of her answer.
     const start = i % (words.length - 4);
@@ -330,20 +329,23 @@ test("self-echo cannot flood Gateway: 14 distinct fragments during her answer, s
       ? words[start]                                        // one word: "Claro", "Aqui", "dime"
       : words.slice(start, start + 2 + (i % 3)).join(" ");  // a longer slice
     a.current().emitAppend(fragment, true);
-    await a.settle(COALESCE_MS + 120);      // each fragment is its own finished turn
+    await a.settle(GRACE_MS + 120);      // each fragment is its own finished turn
   }
   await a.settle(12000);
   assert.strictEqual(a.turnRequests().length, 1,
     "self-echo flooded Gateway with " + (a.turnRequests().length - 1) + " extra turns");
-  assert.strictEqual(cutOffAfter, -1,
-    "her own audio cut her off mid-answer, at fragment " + cutOffAfter);
+  assert.ok(injected >= 5, "only " + injected + " fragments landed during her answer");
+  assert.strictEqual(a.stat("barge-ins"), 0,
+    "her own audio was mistaken for an interruption and cut her off");
   assert.strictEqual(a.stat("breaker"), 0, "the gate should have held without the breaker");
 });
 
-test("the circuit breaker stops voice if anything ever does start looping", async () => {
-  // Backstop for a feedback path the gate does not cover: drive distinct real
-  // turns faster than a person can speak and prove voice stops rather than
-  // flooding Gateway.
+test("the silence grace period structurally caps the voice turn rate", async () => {
+  // With a resettable 1.5s silence window every voice turn costs at least that
+  // long, so even a browser with no speechSynthesis -- the one configuration
+  // the TTS gate cannot cover -- cannot exceed roughly 13 turns per 20s. That
+  // bound sits below the breaker threshold, which is why the breaker is now a
+  // dormant safety valve rather than the thing holding the line.
   // Run it on a browser with no speech synthesis, so the TTS gate has nothing
   // to hold and the breaker is the only thing left between a loop and Gateway.
   const a = createApp({
@@ -354,16 +356,18 @@ test("the circuit breaker stops voice if anything ever does start looping", asyn
   });
   await a.login();
   await a.startVoice();
+  const t0 = a.clock.now();
   for (let i = 0; i < 40 && a.voiceActive(); i++) {
     a.current().emitAppend("pregunta numero " + i, true);
-    await a.settle(COALESCE_MS + 120);
+    await a.settle(GRACE_MS + 120);
   }
   await a.settle(2000);
-  assert.ok(a.stat("breaker") >= 1, "the breaker never tripped");
-  assert.strictEqual(a.voiceActive(), false, "voice kept running past the breaker");
-  assert.ok(a.turnRequests().length <= TURN_BREAKER_MAX_EXPECTED + 2,
-    "too many requests before the breaker: " + a.turnRequests().length);
-  assert.ok(a.messages().some((m) => /micr[oó]fono/i.test(m)), "no explanation shown to Luis");
+  const elapsed = a.clock.now() - t0;
+  const ratePer20s = a.turnRequests().length / (elapsed / 20000);
+  assert.ok(ratePer20s < TURN_BREAKER_MAX_EXPECTED,
+    "turn rate " + ratePer20s.toFixed(1) + "/20s reached the breaker threshold");
+  assert.strictEqual(a.stat("breaker"), 0, "the breaker fired on legitimate turns");
+  assert.strictEqual(a.voiceActive(), true, "voice stopped without cause");
 });
 
 test("the gate itself paces voice turns, so the breaker is a backstop not a limiter", async () => {
@@ -374,7 +378,7 @@ test("the gate itself paces voice turns, so the breaker is a backstop not a limi
   // Hammer as fast as the recogniser could possibly deliver finished turns.
   for (let i = 0; i < 30; i++) {
     a.current().emitAppend("pregunta numero " + i, true);
-    await a.settle(COALESCE_MS + 60);
+    await a.settle(GRACE_MS + 60);
   }
   await a.settle(4000);
   const elapsed = a.clock.now() - t0;
@@ -393,7 +397,7 @@ test("a normal conversation never trips the breaker", async () => {
   await a.startVoice();
   for (let i = 0; i < 6; i++) {
     a.current().emitAppend("pregunta numero " + i, true);
-    await a.settle(COALESCE_MS + 4000);        // human pace, with her answering
+    await a.settle(GRACE_MS + 4000);        // human pace, with her answering
   }
   assert.strictEqual(a.stat("breaker"), 0, "the breaker tripped on normal speech");
   assert.strictEqual(a.turnRequests().length, 6);
@@ -420,6 +424,6 @@ test("voice survives Android refusing the first start() after the TTS reset", as
   assert.strictEqual(a.voiceActive(), true, "a refused start() killed the voice session");
   assert.strictEqual(a.gate(), "open");
   a.current().emitAppend("Cierra la orden", true);
-  await a.settle(COALESCE_MS + 800);
+  await a.settle(GRACE_MS + 800);
   assert.strictEqual(a.turnRequests().length, 2, "voice never recovered its microphone");
 });

@@ -14,7 +14,7 @@ const assert = require("node:assert");
 const { createApp } = require("./harness.js");
 
 const BURST = ["Panchita", "Panchita quiero", "Panchita quiero que", "Panchita quiero que me ayudes"];
-const COALESCE_MS = 400;
+const GRACE_MS = 1500;   // TURN_SILENCE_MS in voice-v2.html
 
 async function live(opts) {
   const a = createApp(opts);
@@ -38,7 +38,7 @@ test("a cumulative final burst produces exactly one Gateway submission", async (
   const a = await live();
   const r = a.current();
   for (const t of BURST) { r.emitAppend(t, true); await a.settle(40); }
-  await a.settle(COALESCE_MS + 200);
+  await a.settle(GRACE_MS + 200);
   const reqs = a.turnRequests();
   assert.strictEqual(reqs.length, 1, "expected 1 submission, got " + reqs.length);
   assert.strictEqual(reqs[0].body.message, "Panchita quiero que me ayudes");
@@ -48,7 +48,7 @@ test("the same burst delivered as independent result events also sends once", as
   const a = await live();
   const r = a.current();
   for (const t of BURST) { r.emitOne(t, true); await a.settle(40); }
-  await a.settle(COALESCE_MS + 200);
+  await a.settle(GRACE_MS + 200);
   assert.strictEqual(a.turnRequests().length, 1);
   assert.strictEqual(a.turnRequests()[0].body.message, "Panchita quiero que me ayudes");
 });
@@ -61,7 +61,7 @@ test("interims interleaved with the cumulative finals change nothing", async () 
     r.emitAppend(t, true);
     await a.settle(40);
   }
-  await a.settle(COALESCE_MS + 200);
+  await a.settle(GRACE_MS + 200);
   assert.strictEqual(a.turnRequests().length, 1);
   assert.strictEqual(a.turnRequests()[0].body.message, "Panchita quiero que me ayudes");
 });
@@ -75,7 +75,7 @@ test("a recogniser replaced after a failed restart submits nothing when it fires
   await a.settle(1500);                  // ...so the page builds a fresh recogniser
   assert.ok(a.recognizers.length >= 2, "the page did not replace the recogniser");
   stale.emitAppend("Panchita cierra la orden", true);   // the OLD one fires late
-  await a.settle(COALESCE_MS + 600);
+  await a.settle(GRACE_MS + 600);
   assert.strictEqual(a.turnRequests().length, 0, "a stale recogniser submitted");
   assert.ok(a.stat("stale callbacks ignored") >= 1);
 });
@@ -87,7 +87,7 @@ test("the recogniser replaced by unmute leaves the old one unable to submit", as
   await a.mute();                        // unmute builds a fresh recogniser
   assert.ok(a.recognizers.length >= 2, "unmute did not build a new recogniser");
   stale.emitAppend("Panchita borra la orden", true);
-  await a.settle(COALESCE_MS + 600);
+  await a.settle(GRACE_MS + 600);
   assert.strictEqual(a.turnRequests().length, 0, "the pre-mute recogniser submitted");
   assert.strictEqual(a.voiceActive(), true);
 });
@@ -97,7 +97,7 @@ test("a recogniser aborted by mute submits nothing when it fires late", async ()
   const r = a.current();
   await a.mute();
   r.emitAppend("Panchita borra todo", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.strictEqual(a.turnRequests().length, 0);
 });
 
@@ -106,7 +106,7 @@ test("a recogniser aborted by End voice submits nothing when it fires late", asy
   const r = a.current();
   await a.endVoice();
   r.emitAppend("Panchita borra todo", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.strictEqual(a.turnRequests().length, 0);
 });
 
@@ -132,9 +132,9 @@ test("mute discards speech buffered mid-sentence", async () => {
   r.emitAppend("Panchita quiero", true);
   await a.settle(100);                   // still inside the coalesce window
   await a.mute();
-  await a.settle(COALESCE_MS + 800);
+  await a.settle(GRACE_MS + 800);
   assert.strictEqual(a.turnRequests().length, 0, "muting still submitted the half sentence");
-  assert.strictEqual(a.phase(), "muted");
+  assert.strictEqual(a.state(), "MANUALLY_MUTED");
 });
 
 test("End voice discards speech buffered mid-sentence", async () => {
@@ -143,7 +143,7 @@ test("End voice discards speech buffered mid-sentence", async () => {
   r.emitAppend("Panchita quiero", true);
   await a.settle(100);
   await a.endVoice();
-  await a.settle(COALESCE_MS + 800);
+  await a.settle(GRACE_MS + 800);
   assert.strictEqual(a.turnRequests().length, 0, "ending voice still submitted the half sentence");
   assert.strictEqual(a.voiceActive(), false);
 });
@@ -160,7 +160,7 @@ test("a long dictation with many cumulative finals sends one request", async () 
     r.emitAppend(acc, true);
     await a.settle(60);                  // faster than the coalesce window
   }
-  await a.settle(COALESCE_MS + 300);
+  await a.settle(GRACE_MS + 300);
   assert.strictEqual(a.turnRequests().length, 1,
     "flood: " + words.length + " hypotheses became " + a.turnRequests().length + " requests");
   assert.strictEqual(a.turnRequests()[0].body.message, acc);
@@ -177,7 +177,7 @@ test("three real turns send exactly three requests, never more", async () => {
       r.emitAppend(acc, true);
       await a.settle(50);
     }
-    await a.settle(COALESCE_MS + 2000);  // let the answer be spoken
+    await a.settle(GRACE_MS + 2000);  // let the answer be spoken
   }
   const reqs = a.turnRequests();
   assert.strictEqual(reqs.length, 3, "expected 3, got " + reqs.length);
@@ -189,7 +189,7 @@ test("the microphone is still listening after a full turn completes", async () =
   const a = await live();
   const r = a.current();
   for (const t of BURST) { r.emitAppend(t, true); await a.settle(40); }
-  await a.settle(COALESCE_MS + 3000);
+  await a.settle(GRACE_MS + 3000);
   assert.strictEqual(a.voiceActive(), true, "voice session died after one turn");
   assert.strictEqual(a.phase(), "listening", "phase stuck at " + a.phase());
   assert.strictEqual(a.stat("turns sent"), 1);
@@ -206,9 +206,9 @@ test("the recogniser is reopened when Android closes it", async () => {
 test("a second turn works after the first one is answered", async () => {
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 3000);
+  await a.settle(GRACE_MS + 3000);
   a.current().emitAppend("Cierra la orden", true);
-  await a.settle(COALESCE_MS + 3000);
+  await a.settle(GRACE_MS + 3000);
   assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
     ["Hola Panchita", "Cierra la orden"]);
 });
@@ -221,7 +221,7 @@ test("barge-in stops Panchita, and the speech she is interrupted with is not sub
   // she stops -- and what Luis says once she is silent is an ordinary turn.
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 500);
+  await a.settle(GRACE_MS + 500);
   assert.strictEqual(a.speaking(), true, "she should be speaking by now");
 
   a.current().emitAppend("Espera", true);          // Luis talks over her
@@ -232,7 +232,7 @@ test("barge-in stops Panchita, and the speech she is interrupted with is not sub
   await a.settle(1500);                            // gate opens, mic reset
   assert.strictEqual(a.gate(), "open");
   a.current().emitAppend("mejor manana", true);    // he keeps talking
-  await a.settle(COALESCE_MS + 2000);
+  await a.settle(GRACE_MS + 2000);
 
   assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
     ["Hola Panchita", "mejor manana"]);
@@ -245,9 +245,9 @@ test("Panchita's own words are never submitted as a turn", async () => {
       : { status: "completed", human_readable_response: "La orden del jueves ya esta cerrada" }
   });
   a.current().emitAppend("Como esta la orden", true);
-  await a.settle(COALESCE_MS + 2000);
+  await a.settle(GRACE_MS + 2000);
   a.current().emitAppend("la orden del jueves ya esta cerrada", true);   // echo
-  await a.settle(COALESCE_MS + 1500);
+  await a.settle(GRACE_MS + 1500);
   assert.strictEqual(a.turnRequests().length, 1, "an echo was submitted as a turn");
   assert.ok(a.stat("echoes suppressed") >= 1);
 });
@@ -255,9 +255,9 @@ test("Panchita's own words are never submitted as a turn", async () => {
 test("a repeated identical turn is still suppressed", async () => {
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 2500);
+  await a.settle(GRACE_MS + 2500);
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 2500);
+  await a.settle(GRACE_MS + 2500);
   assert.strictEqual(a.turnRequests().length, 1);
   assert.ok(a.stat("duplicates suppressed") >= 1);
 });
@@ -282,7 +282,7 @@ test("typed text still submits, with voice off and with voice on", async () => {
 test("every voice turn carries the session token and nothing else new", async () => {
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 2000);
+  await a.settle(GRACE_MS + 2000);
   const body = a.turnRequests()[0].body;
   assert.deepStrictEqual(Object.keys(body).sort(), ["language", "message", "session_id"]);
   assert.strictEqual(body.session_id, "test-session-1");
@@ -311,7 +311,7 @@ test("an expired session still forces re-login and stops voice", async () => {
   });
   expire = true;
   a.current().emitAppend("Hola Panchita", true);
-  await a.settle(COALESCE_MS + 2000);
+  await a.settle(GRACE_MS + 2000);
   assert.strictEqual(a.loggedIn(), false, "an expired session did not return to login");
   assert.strictEqual(a.voiceActive(), false, "voice kept running after session expiry");
 });
@@ -325,9 +325,9 @@ test("voice cannot start without a session", async () => {
 });
 
 /* -- The page must not claim the long-pause problem is solved -------------- */
-test("the coalesce window is declared provisional and not an end-of-turn timer", async () => {
+test("the silence grace period is declared, and engine endpointing is advisory", async () => {
   const a = await live();
   const diag = a.diag();
-  assert.strictEqual(diag["fixed silence timer"], "NONE (engine endpointing)");
-  assert.match(diag["final-burst coalesce"], /^400ms \(not end-of-turn\)$/);
+  assert.match(diag["silence grace"], /^1500ms \(resets on speech\)$/);
+  assert.strictEqual(diag["engine endpointing"], "advisory only (never ends a turn)");
 });
