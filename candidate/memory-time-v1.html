@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Panchita Personal — memory + time candidate</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #171a21;
+    --accent: #3fa9f5;
+    --accent-dim: #235a7d;
+    --text: #eef1f6;
+    --text-dim: #9aa4b2;
+    --danger: #e2574c;
+    --ok: #3fcf8e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, Roboto, "Segoe UI", sans-serif;
+    overscroll-behavior: none;
+  }
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
+  .screen { display: none; flex: 1; flex-direction: column; padding: 20px; }
+  .screen.active { display: flex; }
+
+  /* ---- Login screen ---- */
+  #login-screen { justify-content: center; align-items: center; gap: 18px; }
+  .login-card {
+    width: 100%; max-width: 360px; background: var(--card);
+    border-radius: 16px; padding: 28px 22px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .login-title { font-size: 22px; font-weight: 600; text-align: center; margin-bottom: 4px; }
+  .login-sub { font-size: 13px; color: var(--text-dim); text-align: center; margin-bottom: 10px; }
+  label { font-size: 13px; color: var(--text-dim); }
+  input[type=tel], input[type=password], input[type=text] {
+    width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #2a2f3a;
+    background: #0c0e12; color: var(--text); font-size: 16px; margin-top: 6px;
+  }
+  input:focus { outline: 2px solid var(--accent); }
+  button {
+    border: none; border-radius: 10px; font-size: 16px; font-weight: 600;
+    padding: 14px; cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: #06121a; }
+  .btn-primary:disabled { background: var(--accent-dim); color: #6b7885; }
+  .btn-secondary { background: transparent; color: var(--text-dim); border: 1px solid #2a2f3a; }
+  .lang-toggle { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
+  .lang-btn {
+    flex: 1; padding: 8px; border-radius: 8px; background: #0c0e12; color: var(--text-dim);
+    border: 1px solid #2a2f3a; font-size: 13px; font-weight: 500;
+  }
+  .lang-btn.active { background: var(--accent); color: #06121a; border-color: var(--accent); }
+  .candidate-banner {
+    background: rgba(63,169,245,0.10); border: 1px solid var(--accent-dim);
+    color: var(--accent); padding: 8px 10px; border-radius: 8px;
+    font-size: 11px; text-align: center; letter-spacing: 0.3px;
+  }
+  .error-box {
+    background: rgba(226,87,76,0.12); border: 1px solid var(--danger);
+    color: #ffb4ae; padding: 10px 12px; border-radius: 10px; font-size: 13px; display: none;
+  }
+
+  /* ---- Chat screen ---- */
+  #chat-screen { padding: 0; }
+  .chat-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; background: var(--card); border-bottom: 1px solid #22262f;
+  }
+  .chat-header .title { font-weight: 600; font-size: 16px; }
+  .chat-header .session-pill { font-size: 11px; color: var(--text-dim); }
+  .logout-btn { background: transparent; color: var(--text-dim); font-size: 13px; padding: 8px 10px; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 88%; padding: 12px 14px; border-radius: 14px; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #06121a; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--card); border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; background: transparent; color: var(--text-dim); font-size: 12px; text-align: center; }
+  .sources { margin-top: 8px; font-size: 11px; color: var(--text-dim); display: flex; flex-direction: column; gap: 3px; }
+  .sources a { color: var(--accent); text-decoration: none; }
+
+  .input-bar {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    background: var(--card); border-top: 1px solid #22262f;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .text-input {
+    flex: 1; padding: 12px 14px; border-radius: 20px; border: 1px solid #2a2f3a;
+    background: #0c0e12; color: var(--text); font-size: 15px;
+  }
+  .mic-btn {
+    width: 56px; height: 56px; border-radius: 50%; background: var(--accent);
+    color: #06121a; font-size: 22px; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; padding: 0;
+  }
+  .mic-btn.listening { background: var(--danger); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(226,87,76,0.5);} 70% { box-shadow: 0 0 0 14px rgba(226,87,76,0);} 100% { box-shadow: 0 0 0 0 rgba(226,87,76,0);} }
+  .send-btn { width: 48px; height: 48px; border-radius: 50%; background: var(--ok); color: #06231a; flex-shrink: 0; padding: 0; font-size: 18px; }
+  .send-btn:disabled { opacity: 0.4; }
+  .hint { font-size: 11px; color: var(--text-dim); text-align: center; padding: 4px 0 0; }
+  .mic-diag { display: none; background: #1c2230; color: #ffd479; font-family: monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; padding: 10px 12px; margin: 0 14px 8px; border-radius: 8px; border: 1px solid #3a3020; }
+  .mic-diag.visible { display: block; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(0,0,0,0.25); border-top-color: #06121a; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; vertical-align: -3px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen" class="screen active">
+    <div class="login-card">
+      <div class="login-title">Panchita Personal</div>
+      <div class="candidate-banner">CANDIDATE BUILD — memoria + fecha/hora. No es la app de producción.</div>
+      <div class="login-sub" id="login-sub">Acceso solo para el propietario</div>
+
+      <div class="lang-toggle">
+        <button type="button" class="lang-btn active" data-lang="es" id="lang-es">Español</button>
+        <button type="button" class="lang-btn" data-lang="en" id="lang-en">English</button>
+      </div>
+
+      <div>
+        <label id="label-phone">Últimos 4 dígitos de tu teléfono</label>
+        <input type="tel" id="phone4" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="1234" autocomplete="off">
+      </div>
+      <div>
+        <label id="label-pass">Contraseña</label>
+        <input type="password" id="password" autocomplete="off" placeholder="••••••••">
+      </div>
+
+      <div class="error-box" id="login-error"></div>
+
+      <button class="btn-primary" id="login-btn">
+        <span id="login-btn-text">Entrar</span>
+      </button>
+      <div class="hint" id="login-hint">Tu contraseña nunca se guarda en este dispositivo.</div>
+    </div>
+  </div>
+
+  <!-- CHAT SCREEN -->
+  <div id="chat-screen" class="screen">
+    <div class="chat-header">
+      <div>
+        <div class="title">Panchita</div>
+        <div class="session-pill" id="session-pill">&nbsp;</div>
+      </div>
+      <button class="logout-btn" id="logout-btn">Salir</button>
+    </div>
+    <div id="messages"></div>
+    <div class="input-bar">
+      <button class="mic-btn" id="mic-btn" title="Hablar">🎤</button>
+      <input type="text" class="text-input" id="text-input" placeholder="Escribe tu pregunta...">
+      <button class="send-btn" id="send-btn">➤</button>
+    </div>
+    <div class="mic-diag" id="mic-diag"></div>
+    <div class="hint" id="chat-hint">&nbsp;</div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- Configuration: the ONLY server contact point this app knows about ----
+  var GATEWAY_URL = "https://panchita.app.n8n.cloud/webhook/panchita-personal-gateway-v01";
+
+  // ===== BEGIN PURE HELPERS ===================================================
+  // The single job of the frontend in the date/time fix: report WHICH time zone
+  // this phone is in. It never reports what time it is for the purpose of
+  // answering "what's today's date" -- the Gateway's own runtime clock is the
+  // authority for the instant, and client_now below exists only so the Gateway
+  // can NOTICE a skewed phone clock, never so it can adopt one.
+  //
+  // client_utc_offset_minutes is EAST-POSITIVE (America/Chicago in summer ->
+  // -300), which is the opposite sign from Date#getTimezoneOffset(). The
+  // Gateway's tzOffsetMinutes() uses the same east-positive convention, so the
+  // two can be compared directly.
+  function buildClientTimeContext(now) {
+    var d = now instanceof Date ? now : new Date();
+    var zone = "";
+    try {
+      var resolved = Intl.DateTimeFormat().resolvedOptions();
+      if (resolved && typeof resolved.timeZone === "string") zone = resolved.timeZone;
+    } catch (e) {
+      zone = "";
+    }
+    var offset = null;
+    try {
+      var raw = d.getTimezoneOffset();
+      if (typeof raw === "number" && isFinite(raw)) offset = -raw;
+    } catch (e) {
+      offset = null;
+    }
+    var ctx = { client_now: d.toISOString() };
+    // Omit rather than send an empty string: the Gateway distinguishes
+    // "device reported no zone" (assume the default, and say so) from
+    // "device reported a zone", and a blank string is not a report.
+    if (zone) ctx.client_time_zone = zone;
+    if (offset !== null) ctx.client_utc_offset_minutes = offset;
+    return ctx;
+  }
+
+  // Merge the runtime clock context into an outbound Gateway payload without
+  // ever touching the authentication fields the payload already carries.
+  function withClientTimeContext(payload, now) {
+    var out = {};
+    var k;
+    for (k in payload) { if (Object.prototype.hasOwnProperty.call(payload, k)) out[k] = payload[k]; }
+    var ctx = buildClientTimeContext(now);
+    for (k in ctx) { if (Object.prototype.hasOwnProperty.call(ctx, k)) out[k] = ctx[k]; }
+    return out;
+  }
+  // ===== END PURE HELPERS =====================================================
+
+  // ---- In-memory-only session state. NEVER written to localStorage / sessionStorage / IndexedDB / cookies. ----
+  var state = {
+    lang: "es",
+    sessionToken: null,      // raw session token, memory only
+    sessionExpiresAt: null,  // ISO string, memory only
+    pendingPassword: null    // held only for the single in-flight login request, cleared immediately after
+  };
+
+  var STR = {
+    es: {
+      subLogin: "Acceso solo para el propietario",
+      labelPhone: "Últimos 4 dígitos de tu teléfono",
+      labelPass: "Contraseña",
+      loginBtn: "Entrar",
+      loginHint: "Tu contraseña nunca se guarda en este dispositivo.",
+      needBoth: "Ingresa los 4 dígitos y tu contraseña.",
+      genericError: "No se pudo conectar. Intenta de nuevo.",
+      textPlaceholder: "Escribe tu pregunta...",
+      thinking: "Pensando...",
+      sessionActive: "Sesión activa",
+      sessionExpired: "Tu sesión expiró. Vuelve a iniciar sesión.",
+      loggedOut: "Sesión cerrada.",
+      micNotSupported: "El micrófono no está disponible en este navegador. Usa el texto.",
+      emptySubmit: "Escribe o di algo antes de enviar."
+    },
+    en: {
+      subLogin: "Owner access only",
+      labelPhone: "Last 4 digits of your phone",
+      labelPass: "Password",
+      loginBtn: "Sign in",
+      loginHint: "Your password is never stored on this device.",
+      needBoth: "Enter the 4 digits and your password.",
+      genericError: "Couldn't connect. Please try again.",
+      textPlaceholder: "Type your question...",
+      thinking: "Thinking...",
+      sessionActive: "Session active",
+      sessionExpired: "Your session expired. Please sign in again.",
+      loggedOut: "Signed out.",
+      micNotSupported: "Microphone isn't available in this browser. Use text instead.",
+      emptySubmit: "Type or say something before sending."
+    }
+  };
+
+  function t(key) { return STR[state.lang][key]; }
+
+  // ---- DOM refs ----
+  var loginScreen = document.getElementById("login-screen");
+  var chatScreen = document.getElementById("chat-screen");
+  var phoneInput = document.getElementById("phone4");
+  var passInput = document.getElementById("password");
+  var loginBtn = document.getElementById("login-btn");
+  var loginBtnText = document.getElementById("login-btn-text");
+  var loginError = document.getElementById("login-error");
+  var messagesEl = document.getElementById("messages");
+  var textInput = document.getElementById("text-input");
+  var sendBtn = document.getElementById("send-btn");
+  var micBtn = document.getElementById("mic-btn");
+  var sessionPill = document.getElementById("session-pill");
+  var chatHint = document.getElementById("chat-hint");
+  var micDiagEl = document.getElementById("mic-diag");
+  var logoutBtn = document.getElementById("logout-btn");
+
+  function applyLangToLoginUI() {
+    document.getElementById("login-sub").textContent = t("subLogin");
+    document.getElementById("label-phone").textContent = t("labelPhone");
+    document.getElementById("label-pass").textContent = t("labelPass");
+    loginBtnText.textContent = t("loginBtn");
+    document.getElementById("login-hint").textContent = t("loginHint");
+    textInput.placeholder = t("textPlaceholder");
+    document.getElementById("lang-es").classList.toggle("active", state.lang === "es");
+    document.getElementById("lang-en").classList.toggle("active", state.lang === "en");
+  }
+
+  document.getElementById("lang-es").addEventListener("click", function () { state.lang = "es"; applyLangToLoginUI(); });
+  document.getElementById("lang-en").addEventListener("click", function () { state.lang = "en"; applyLangToLoginUI(); });
+
+  function showScreen(id) {
+    document.querySelectorAll(".screen").forEach(function (s) { s.classList.remove("active"); });
+    document.getElementById(id).classList.add("active");
+  }
+
+  function showLoginError(msg) {
+    loginError.textContent = msg;
+    loginError.style.display = "block";
+  }
+  function hideLoginError() {
+    loginError.style.display = "none";
+  }
+
+  // ---- Networking ----
+  function callGateway(payload) {
+    return fetch(GATEWAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(withClientTimeContext(payload))
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        return { httpStatus: res.status, body: data };
+      });
+    });
+  }
+
+  function buildPhoneHint(last4) {
+    return "XXX-XXX-" + last4;
+  }
+
+  // ---- Login flow ----
+  // The gateway has no separate "login-only" endpoint: authentication happens
+  // together with the first message. We send a neutral greeting as that first
+  // message so the owner gets a normal chat reply immediately after signing in.
+  loginBtn.addEventListener("click", function () { doLogin(); });
+  passInput.addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
+
+  function doLogin() {
+    hideLoginError();
+    var last4 = (phoneInput.value || "").trim();
+    var pass = passInput.value || "";
+    if (!/^[0-9]{4}$/.test(last4) || pass.length === 0) {
+      showLoginError(t("needBoth"));
+      return;
+    }
+
+    state.pendingPassword = pass;
+    loginBtn.disabled = true;
+    loginBtnText.innerHTML = '<span class="spinner"></span>';
+
+    var greeting = state.lang === "es" ? "Hola" : "Hello";
+
+    callGateway({
+      message: greeting,
+      language: state.lang,
+      phone_hint: buildPhoneHint(last4),
+      factor_provided: state.pendingPassword
+    }).then(function (result) {
+      // Clear the password from memory immediately, success or failure.
+      state.pendingPassword = null;
+      passInput.value = "";
+      loginBtn.disabled = false;
+      loginBtnText.textContent = t("loginBtn");
+
+      var body = result.body || {};
+      if (body.status === "completed" && body.session_token) {
+        state.sessionToken = body.session_token;
+        state.sessionExpiresAt = body.session_expires_at || null;
+        enterChat();
+        renderBotMessage(body);
+      } else if (body.status === "denied") {
+        showLoginError(body.human_readable_response || t("genericError"));
+      } else if (body.status === "validation_error") {
+        showLoginError(body.human_readable_response || t("genericError"));
+      } else {
+        showLoginError(body.human_readable_response || t("genericError"));
+      }
+    }).catch(function () {
+      state.pendingPassword = null;
+      passInput.value = "";
+      loginBtn.disabled = false;
+      loginBtnText.textContent = t("loginBtn");
+      showLoginError(t("genericError"));
+    });
+  }
+
+  function enterChat() {
+    messagesEl.innerHTML = "";
+    showScreen("chat-screen");
+    sessionPill.textContent = t("sessionActive");
+    phoneInput.value = "";
+  }
+
+  // ---- Logout ----
+  logoutBtn.addEventListener("click", function () { doLogout(); });
+
+  function doLogout() {
+    var token = state.sessionToken;
+    clearSessionAndReturnToLogin(t("loggedOut"));
+    if (token) {
+      // Best-effort revoke call; UI has already returned to login regardless of outcome.
+      callGateway({ action: "logout", language: state.lang, session_id: token }).catch(function () {});
+    }
+  }
+
+  function clearSessionAndReturnToLogin(message) {
+    state.sessionToken = null;
+    state.sessionExpiresAt = null;
+    state.pendingPassword = null;
+    passInput.value = "";
+    messagesEl.innerHTML = "";
+    showScreen("login-screen");
+    applyLangToLoginUI();
+    if (message) showLoginError(message);
+  }
+
+  // ---- Chat rendering ----
+  function renderUserMessage(text) {
+    var div = document.createElement("div");
+    div.className = "msg user";
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function renderSystemMessage(text) {
+    var div = document.createElement("div");
+    div.className = "msg system";
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function renderBotMessage(body) {
+    var div = document.createElement("div");
+    div.className = "msg bot";
+    div.textContent = body.human_readable_response || "";
+
+    if (body.sources && body.sources.length) {
+      var srcWrap = document.createElement("div");
+      srcWrap.className = "sources";
+      body.sources.slice(0, 4).forEach(function (s) {
+        var a = document.createElement("a");
+        a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.textContent = "• " + (s.source_name || s.url);
+        srcWrap.appendChild(a);
+      });
+      div.appendChild(srcWrap);
+    }
+
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    speak(body.human_readable_response);
+  }
+
+  // ---- Speech synthesis (spoken responses) ----
+  // Android Chrome will silently drop an utterance that is queued in the same
+  // task as a cancel(), so every speak() goes through a short deferred restart
+  // instead of cancel()-then-speak() back to back.
+  var SPEAK_RESTART_DELAY_MS = 180;
+  var speakTimerHandle = null;
+  var speaking = false;
+  var cachedVoices = [];
+
+  function refreshVoices() {
+    try {
+      cachedVoices = window.speechSynthesis.getVoices() || [];
+    } catch (e) {
+      cachedVoices = [];
+    }
+  }
+
+  if ("speechSynthesis" in window) {
+    refreshVoices();
+    try {
+      if (typeof window.speechSynthesis.addEventListener === "function") {
+        window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+      } else {
+        window.speechSynthesis.onvoiceschanged = refreshVoices;
+      }
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function preferredLocale() {
+    return state.lang === "es" ? "es-ES" : "en-US";
+  }
+
+  // Exact locale first, then a language-prefix match. Most Android devices ship
+  // es-MX / es-US / en-GB but not the exact locale we ask for; without the
+  // prefix fallback the engine silently falls back to the *device* default
+  // voice, which reads Spanish text with an English voice (or stays mute).
+  function pickVoice(locale) {
+    if (!cachedVoices.length) refreshVoices();
+    if (!cachedVoices.length) return null;
+
+    var wanted = String(locale).toLowerCase().replace("_", "-");
+    var prefix = wanted.split("-")[0];
+    var i, v, lang;
+
+    for (i = 0; i < cachedVoices.length; i++) {
+      v = cachedVoices[i];
+      lang = String(v.lang || "").toLowerCase().replace("_", "-");
+      if (lang === wanted) return v;
+    }
+    for (i = 0; i < cachedVoices.length; i++) {
+      v = cachedVoices[i];
+      lang = String(v.lang || "").toLowerCase().replace("_", "-");
+      if (lang === prefix || lang.indexOf(prefix + "-") === 0) return v;
+    }
+    return null;
+  }
+
+  function isSpeakingNow() {
+    if (!("speechSynthesis" in window)) return false;
+    try {
+      return !!(speaking || window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    } catch (e) {
+      return speaking;
+    }
+  }
+
+  function stopSpeaking() {
+    if (!("speechSynthesis" in window)) return;
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    speaking = false;
+    try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+  }
+
+  function speak(text) {
+    if (!text || !("speechSynthesis" in window)) return;
+
+    // Never speak with an open microphone: an active recognition session would
+    // otherwise transcribe Panchita's own voice straight back as user input.
+    stopRecognition();
+
+    var needsCancel = false;
+    try {
+      needsCancel = !!(window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    } catch (e) { needsCancel = false; }
+
+    if (speakTimerHandle) { clearTimeout(speakTimerHandle); speakTimerHandle = null; }
+    if (needsCancel) {
+      try { window.speechSynthesis.cancel(); } catch (e) { /* non-fatal */ }
+    }
+
+    speakTimerHandle = setTimeout(function () {
+      speakTimerHandle = null;
+      try {
+        var u = new SpeechSynthesisUtterance(text);
+        var locale = preferredLocale();
+        var voice = pickVoice(locale);
+        if (voice) {
+          u.voice = voice;
+          u.lang = voice.lang || locale;
+        } else {
+          u.lang = locale;
+        }
+        speaking = true;
+        u.onend = function () { speaking = false; };
+        u.onerror = function () { speaking = false; };
+        window.speechSynthesis.speak(u);
+      } catch (e) {
+        speaking = false;
+      }
+    }, needsCancel ? SPEAK_RESTART_DELAY_MS : 0);
+  }
+
+  // ---- Sending a message ----
+  function sendMessage(text) {
+    var trimmed = (text || "").trim();
+    if (!trimmed) {
+      chatHint.textContent = t("emptySubmit");
+      setTimeout(function () { chatHint.textContent = " "; }, 2500);
+      return;
+    }
+    if (!state.sessionToken) {
+      clearSessionAndReturnToLogin(t("sessionExpired"));
+      return;
+    }
+
+    renderUserMessage(trimmed);
+    textInput.value = "";
+    sendBtn.disabled = true;
+    renderSystemMessage(t("thinking"));
+
+    callGateway({
+      message: trimmed,
+      language: state.lang,
+      session_id: state.sessionToken
+    }).then(function (result) {
+      var thinkingEl = messagesEl.querySelector(".msg.system:last-child");
+      if (thinkingEl) thinkingEl.remove();
+      sendBtn.disabled = false;
+
+      var body = result.body || {};
+      if (body.status === "completed") {
+        if (body.session_token) {
+          state.sessionToken = body.session_token;
+          state.sessionExpiresAt = body.session_expires_at || null;
+        }
+        renderBotMessage(body);
+      } else if (body.status === "denied") {
+        // Denied while holding a session token most often means the session
+        // is no longer valid server-side (expired/revoked) -- fail safe to login.
+        clearSessionAndReturnToLogin(body.human_readable_response || t("sessionExpired"));
+      } else if (body.status === "validation_error" || body.status === "error") {
+        renderBotMessage(body);
+      } else {
+        renderBotMessage({ human_readable_response: t("genericError") });
+      }
+    }).catch(function () {
+      var thinkingEl = messagesEl.querySelector(".msg.system:last-child");
+      if (thinkingEl) thinkingEl.remove();
+      sendBtn.disabled = false;
+      renderSystemMessage(t("genericError"));
+    });
+  }
+
+  sendBtn.addEventListener("click", function () { sendMessage(textInput.value); });
+  textInput.addEventListener("keydown", function (e) { if (e.key === "Enter") sendMessage(textInput.value); });
+
+  // ---- Voice input (Web Speech API, Android Chrome) ----
+  // TEMPORARY DIAGNOSTIC BUILD -- the repeat-microphone lifecycle fix did not
+  // resolve the real-device failure, so this now surfaces only safe,
+  // non-secret evidence on screen (no password/session/phone/permission
+  // data ever touches this): capability + constructor used, which lifecycle
+  // callbacks actually fired, any start() exception name/message, any
+  // onerror event code, whether onstart silently never fired (a hang, not
+  // caught by onerror), and the internal starting/listening flags at the
+  // moment of failure. Remove this diagnostic panel once the real cause is
+  // identified and fixed.
+  var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var micSupported = !!Recognition && window.isSecureContext !== false;
+  var listening = false;
+  var starting = false;
+  var activeRecognizer = null;
+
+  // ---- Push-to-talk turn lifecycle ----
+  // Android Chrome often never fires its own end-of-speech detection, leaving
+  // the recogniser open until the user taps again, so the app does its own
+  // endpointing and enforces a hard ceiling on a single turn.
+  // Raised from 1800ms: on real devices 1.8s clipped natural mid-sentence
+  // pauses, ending the turn before the speaker had finished.
+  var SILENCE_MS = 3500;
+  var MAX_TURN_MS = 15000;
+  var silenceTimerHandle = null;
+  var maxTurnTimerHandle = null;
+  var turnSubmitted = false;
+  var turnAborted = false;
+  var latestTranscript = "";
+
+  function clearTurnTimers() {
+    if (silenceTimerHandle) { clearTimeout(silenceTimerHandle); silenceTimerHandle = null; }
+    if (maxTurnTimerHandle) { clearTimeout(maxTurnTimerHandle); maxTurnTimerHandle = null; }
+  }
+
+  // Ask the recogniser to finalise what it has; the result (or onend) then goes
+  // through submitTurn() like any other completion path.
+  function endTurnNow() {
+    if (!activeRecognizer) return;
+    try { activeRecognizer.stop(); } catch (e) { /* ignore */ }
+  }
+
+  // Re-armed on every speech/result event, so it only fires after real silence.
+  function armSilenceTimer() {
+    if (silenceTimerHandle) clearTimeout(silenceTimerHandle);
+    silenceTimerHandle = setTimeout(function () {
+      silenceTimerHandle = null;
+      endTurnNow();
+    }, SILENCE_MS);
+  }
+
+  // Absolute failsafe for a recogniser that never ends on its own.
+  function armMaxTurnTimer() {
+    if (maxTurnTimerHandle) clearTimeout(maxTurnTimerHandle);
+    maxTurnTimerHandle = setTimeout(function () {
+      maxTurnTimerHandle = null;
+      endTurnNow();
+    }, MAX_TURN_MS);
+  }
+
+  function beginTurn() {
+    clearTurnTimers();
+    turnSubmitted = false;
+    turnAborted = false;
+    latestTranscript = "";
+  }
+
+  // Exactly one submission per microphone turn, whichever path gets there first
+  // (final result, silence endpointing, max-duration failsafe, or onend).
+  function submitTurn(text) {
+    if (turnSubmitted || turnAborted) return;
+    turnSubmitted = true;
+    clearTurnTimers();
+    var finalText = (text || "").trim();
+    if (finalText) {
+      clearDiag();
+      sendMessage(finalText);
+    } else {
+      chatHint.textContent = t("emptySubmit");
+      setTimeout(function () { chatHint.textContent = " "; }, 2500);
+    }
+  }
+
+  // Hard stop with no submission -- used before Panchita speaks and on barge-in.
+  function stopRecognition() {
+    if (!activeRecognizer) return;
+    var r = activeRecognizer;
+    turnAborted = true;
+    clearTurnTimers();
+    activeRecognizer = null;
+    listening = false;
+    starting = false;
+    if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
+    micBtn.classList.remove("listening");
+    try {
+      r.abort();
+    } catch (e) {
+      try { r.stop(); } catch (e2) { /* ignore */ }
+    }
+  }
+
+  var VOICE_MSG = {
+    es: {
+      notSupported: "El microfono no esta disponible en este navegador. Si abriste este enlace desde otra app (WhatsApp, Gmail, etc.), abrelo directamente en Chrome. Mientras tanto usa el texto.",
+      listening: "Escuchando...",
+      permissionDenied: "Permiso de microfono denegado. Habilitalo en los ajustes de Chrome para este sitio.",
+      noMic: "No se detecto microfono en este dispositivo.",
+      network: "El reconocimiento de voz necesita conexion a internet.",
+      genericFail: "No se pudo usar el microfono en este momento. Usa el texto."
+    },
+    en: {
+      notSupported: "Microphone isn't available in this browser. If you opened this link from another app (WhatsApp, Gmail, etc.), open it directly in Chrome instead. Use text for now.",
+      listening: "Listening...",
+      permissionDenied: "Microphone permission denied. Enable it in Chrome's site settings.",
+      noMic: "No microphone was detected on this device.",
+      network: "Voice recognition needs an internet connection.",
+      genericFail: "Couldn't use the microphone right now. Use text instead."
+    }
+  };
+
+  function freshDiag() {
+    return {
+      available: micSupported,
+      ctor: !Recognition ? "none" : (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition"),
+      secureContext: (typeof window.isSecureContext === "boolean") ? window.isSecureContext : "unknown",
+      origin: location.origin,
+      mediaDevicesAvailable: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+      permissionState: "(checking...)",
+      getUserMediaResult: "(not run yet)",
+      onstartFired: false,
+      onendFired: false,
+      onresultFired: false,
+      startException: "",
+      errorCode: "",
+      timedOut: false
+    };
+  }
+  var diag = freshDiag();
+  var startTimeoutHandle = null;
+
+  function renderDiag() {
+    var lines = [
+      "SpeechRecognition available: " + diag.available,
+      "constructor: " + diag.ctor,
+      "secure context: " + diag.secureContext,
+      "origin: " + diag.origin,
+      "mediaDevices.getUserMedia present: " + diag.mediaDevicesAvailable,
+      "permissions.query(microphone): " + diag.permissionState,
+      "getUserMedia probe: " + diag.getUserMediaResult,
+      "onstart fired: " + diag.onstartFired,
+      "onresult fired: " + diag.onresultFired,
+      "onend fired: " + diag.onendFired,
+      "onerror code: " + (diag.errorCode || "(none)"),
+      "start() exception: " + (diag.startException || "(none)"),
+      "no onstart within 4s: " + diag.timedOut,
+      "flags -> starting: " + starting + ", listening: " + listening
+    ];
+    micDiagEl.textContent = lines.join("\n");
+    micDiagEl.classList.add("visible");
+  }
+  function clearDiag() {
+    micDiagEl.classList.remove("visible");
+    micDiagEl.textContent = "";
+  }
+
+  function createRecognizer() {
+    var r = new Recognition();
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = state.lang === "es" ? "es-ES" : "en-US";
+
+    r.onstart = function () {
+      listening = true;
+      starting = false;
+      diag.onstartFired = true;
+      if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
+      micBtn.classList.add("listening");
+      chatHint.textContent = VOICE_MSG[state.lang].listening;
+      armSilenceTimer();
+      armMaxTurnTimer();
+    };
+    r.onaudiostart = function () { armSilenceTimer(); };
+    r.onspeechstart = function () { armSilenceTimer(); };
+    r.onend = function () {
+      listening = false;
+      starting = false;
+      diag.onendFired = true;
+      clearTurnTimers();
+      if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
+      micBtn.classList.remove("listening");
+      // Endpointing fallback: the turn ended (silence timer, max-duration
+      // failsafe, or the engine itself) without ever delivering a final
+      // result. Send the best interim transcript rather than losing the turn.
+      if (!turnSubmitted && !turnAborted && latestTranscript.trim()) {
+        submitTurn(latestTranscript);
+      }
+      if (chatHint.textContent === VOICE_MSG.es.listening || chatHint.textContent === VOICE_MSG.en.listening) {
+        chatHint.textContent = " ";
+      }
+      // If the turn ended without ever producing a result and without an
+      // explicit onerror either, that is itself diagnostic evidence -- show it.
+      if (!diag.onresultFired && !diag.errorCode) {
+        renderDiag();
+      }
+      if (activeRecognizer === r) activeRecognizer = null;
+    };
+    r.onerror = function (event) {
+      listening = false;
+      starting = false;
+      clearTurnTimers();
+      diag.errorCode = (event && event.error) ? event.error : "(unknown)";
+      if (startTimeoutHandle) { clearTimeout(startTimeoutHandle); startTimeoutHandle = null; }
+      micBtn.classList.remove("listening");
+      var m = VOICE_MSG[state.lang];
+      var code = event && event.error;
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        chatHint.textContent = m.permissionDenied;
+      } else if (code === "audio-capture") {
+        chatHint.textContent = m.noMic;
+      } else if (code === "network") {
+        chatHint.textContent = m.network;
+      } else if (code === "no-speech" || code === "aborted") {
+        chatHint.textContent = " ";
+      } else {
+        chatHint.textContent = m.genericFail;
+      }
+      renderDiag();
+      if (activeRecognizer === r) activeRecognizer = null;
+    };
+    r.onresult = function (event) {
+      diag.onresultFired = true;
+      var transcript = "";
+      var isFinal = false;
+      for (var i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) isFinal = true;
+      }
+      textInput.value = transcript;
+      latestTranscript = transcript;
+      if (isFinal) {
+        submitTurn(transcript);
+      } else {
+        // Speech is still coming in -- push the silence deadline back.
+        armSilenceTimer();
+      }
+    };
+    return r;
+  }
+
+  // Runs a read-only diagnostic probe BEFORE the actual speech-recognition
+  // attempt, so a single tap can tell apart: (1) OS/app-level mic denial,
+  // (2) origin/site permission denial, (3) getUserMedia works but
+  // SpeechRecognition itself is denied (a separate gate on Android Chrome),
+  // (4) an unsupported/restricted execution context (e.g. missing secure
+  // context, or a Permissions-Policy header blocking the API -- that shows
+  // up as a SecurityError here even though no site setting was ever
+  // changed), vs (5) a frontend bug. No audio is captured, recorded, or
+  // uploaded -- the probe immediately stops every track it opens.
+  function runContextProbeThenRecognize() {
+    function afterProbe() {
+      starting = true;
+      activeRecognizer = createRecognizer();
+      try {
+        activeRecognizer.start();
+        // Evidence for a silent hang: start() returns normally but neither
+        // onstart nor onerror ever fires (a real, previously-undetectable
+        // Android Chrome failure mode).
+        startTimeoutHandle = setTimeout(function () {
+          if (starting && !diag.onstartFired && !diag.errorCode) {
+            diag.timedOut = true;
+            starting = false;
+            renderDiag();
+          }
+        }, 4000);
+      } catch (e) {
+        starting = false;
+        activeRecognizer = null;
+        diag.startException = (e && e.name ? e.name : "Error") + ": " + (e && e.message ? e.message : String(e));
+        renderDiag();
+        chatHint.textContent = VOICE_MSG[state.lang].genericFail;
+      }
+    }
+
+    function runGetUserMediaProbe() {
+      if (!diag.mediaDevicesAvailable) {
+        diag.getUserMediaResult = "skipped (mediaDevices.getUserMedia not present)";
+        afterProbe();
+        return;
+      }
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+        try {
+          stream.getTracks().forEach(function (tr) { tr.stop(); });
+        } catch (e) { /* ignore */ }
+        diag.getUserMediaResult = "granted";
+        afterProbe();
+      }).catch(function (err) {
+        diag.getUserMediaResult = (err && err.name ? err.name : "Error") + (err && err.message ? " - " + err.message : "");
+        afterProbe();
+      });
+    }
+
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "microphone" }).then(function (status) {
+        diag.permissionState = status.state;
+        runGetUserMediaProbe();
+      }).catch(function (err) {
+        diag.permissionState = "unsupported (" + ((err && err.name) || "error") + ")";
+        runGetUserMediaProbe();
+      });
+    } else {
+      diag.permissionState = "unsupported (Permissions API not present)";
+      runGetUserMediaProbe();
+    }
+  }
+
+  micBtn.addEventListener("click", function () {
+    if (!micSupported) {
+      diag = freshDiag();
+      renderDiag();
+      chatHint.textContent = VOICE_MSG[state.lang].notSupported;
+      return;
+    }
+    // Manual barge-in: tapping the mic while Panchita is talking silences her
+    // first, so the microphone never hears -- and transcribes -- her own voice.
+    if (isSpeakingNow()) {
+      stopSpeaking();
+    }
+    if (listening || starting) {
+      // Already mid-turn -- stop it rather than starting a second one on top.
+      clearTurnTimers();
+      if (activeRecognizer) {
+        try { activeRecognizer.stop(); } catch (e) { /* ignore */ }
+      }
+      return;
+    }
+    clearDiag();
+    diag = freshDiag();
+    beginTurn();
+    runContextProbeThenRecognize();
+  });
+
+  // ---- Client-side session expiry watch (defense in depth; server is authoritative) ----
+  setInterval(function () {
+    if (state.sessionToken && state.sessionExpiresAt) {
+      if (new Date(state.sessionExpiresAt).getTime() <= Date.now()) {
+        clearSessionAndReturnToLogin(t("sessionExpired"));
+      }
+    }
+  }, 15000);
+
+  applyLangToLoginUI();
+})();
+</script>
+</body>
+</html>
