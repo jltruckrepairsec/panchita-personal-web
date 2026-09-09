@@ -19,7 +19,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { createApp } = require("./harness.js");
 
-const GRACE_MS = 1500;   // TURN_SILENCE_MS in voice-v2.html
+const GRACE_MS = 1800;   // TURN_SILENCE_MS in voice-v2.html
 const TURN_BREAKER_MAX_EXPECTED = 20;
 
 /* The answer she speaks, and the fragments Android fed back from it. */

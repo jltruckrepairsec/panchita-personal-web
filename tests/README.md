@@ -88,6 +88,26 @@ Verified against the previous deployment: 8 of these 13 fail there, including
 `Panchita answered during the pause: ["Quiero que me ayudes con"]` and
 backgrounding the page showing `SILENCIADO` — the two reported symptoms.
 
+## Android session teardown (the behaviour the suite was missing)
+
+`voice-v2-android-session.test.js`. Android Chrome ends the recognition
+session at its OWN endpointer even with `continuous = true`, so every natural
+pause tears the session down and the page is deaf until it rebuilds one. The
+old harness kept a single session alive forever, which is why a green suite
+still shipped a build that cut Luis off on the phone. The fake recogniser now
+models `androidEndpoint()` and `androidNoSpeech()`, and start-up latency.
+
+Measured pause tolerance (wall clock, from the last word to the split):
+
+| Build | Turn sounds complete | Turn ends on a dangling word |
+| --- | --- | --- |
+| `149d94e` (failed on the phone) | 1.6 s | 1.6 s |
+| this candidate | 2.2 s | 3.8 s |
+
+Verified against `149d94e`: 10 of these 12 fail there, including
+`cut off mid-sentence: ["Panchita quiero que me ayudes"]` — the exact string
+the phone produced.
+
 ## What these tests do NOT prove
 
 They model an engine, not a room. Pause tolerance, how promptly barge-in

@@ -122,12 +122,43 @@ function createApp(opts) {
       this.stopped = 0;
       this.live = false;
       this.index = recognizers.length;
+      this._startGen = 0;
       recognizers.push(this);
     }
     start() {
       this.started++;
       if (this.failNextStart) { this.failNextStart = false; throw new Error("InvalidStateError"); }
       this.live = true;
+      // A real engine does not become live synchronously. onstart and
+      // onaudiostart arrive after the service spins up, and the microphone is
+      // DEAF for that whole window -- which is the gap the page has to survive.
+      const gen = ++this._startGen;
+      clock.setTimeout(() => {
+        if (gen !== this._startGen || !this.live) return;
+        if (this.onstart) this.onstart();
+        if (this.onaudiostart) this.onaudiostart();
+      }, opts.spinUpMs === undefined ? 250 : opts.spinUpMs);
+    }
+
+    /* THE ANDROID BEHAVIOUR THE OFFLINE SUITE WAS MISSING.
+       Android Chrome ends the recognition session at its own endpointer even
+       with continuous = true. Every pause therefore tears the session down and
+       the page has to rebuild it, going deaf in between. Nothing in the old
+       harness did this, which is why the natural-pause bug survived a green
+       suite and only appeared on the phone. */
+    androidEndpoint() {
+      if (this.onspeechend) this.onspeechend();
+      if (this.onaudioend) this.onaudioend();
+      this.live = false;
+      this._startGen++;
+      if (this.onend) this.onend();
+    }
+
+    /* Android's other teardown: several seconds of silence, then no-speech
+       followed by onend. This is the idle churn loop. */
+    androidNoSpeech() {
+      if (this.onerror) this.onerror({ error: "no-speech" });
+      this.androidEndpoint();
     }
     abort() { this.aborted++; this.live = false; }
     stop() { this.stopped++; this.live = false; }
@@ -230,8 +261,18 @@ function createApp(opts) {
      the only backstop left. */
   if (opts.noTts) delete sandbox.window.speechSynthesis;
 
+  /* Track microphone acquisition. Each getUserMedia is a fresh capture route
+     on the device, which is the leading suspect for the clicks Luis hears. */
+  const mic = { acquisitions: 0, open: 0 };
   sandbox.navigator = {
-    mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => [] }) }
+    mediaDevices: {
+      getUserMedia: () => {
+        mic.acquisitions++;
+        mic.open++;
+        const track = { stop() { if (!track._stopped) { track._stopped = true; mic.open--; } } };
+        return Promise.resolve({ getTracks: () => [track] });
+      }
+    }
   };
   const visibilityHandlers = [];
   sandbox.document = {
@@ -286,6 +327,21 @@ function createApp(opts) {
       return out;
     },
     stat(name) { return Number(api.diag()[name]); },
+    /* The page's own event trace, newest first, as the phone shows it. */
+    trace() {
+      const panel = getEl("mic-diag");
+      const toggle = getEl("diag-toggle");
+      if (panel.classes.has("visible")) toggle.fire("click");
+      toggle.fire("click");
+      const txt = String(panel.textContent);
+      const i = txt.indexOf("-- event trace");
+      return i < 0 ? [] : txt.slice(i).split("\n").slice(1).filter((l) => l.trim());
+    },
+    traceHas(name) { return api.trace().some((l) => l.indexOf(name) >= 0); },
+    /* How many times the device microphone was acquired from scratch. */
+    micAcquisitions() { return mic.acquisitions; },
+    /* How many capture streams are open right now. */
+    micStreamsOpen() { return mic.open; },
     phase() { return api.diag()["phase"]; },
     /* The composite state the engine reports: LISTENING, USER_SPEAKING,
        USER_PAUSED, ASSISTANT_SPEAKING, MANUALLY_MUTED, THINKING, OFF. */

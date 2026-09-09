@@ -299,7 +299,19 @@
   // Free engine only. Paid Realtime is NOT enabled and NOT reachable from here.
   var PAID_REALTIME_ENABLED = false;
 
-  var RESTART_DELAY_MS = 350;          // gap before reopening the recogniser
+  // Every millisecond here is time the microphone is DEAF: Android ends the
+  // recognition session at its own endpointer, and until the next one is
+  // running Luis's words are not being captured at all. Kept short for that
+  // reason. The silence countdown is frozen across the gap regardless.
+  var RESTART_DELAY_MS = 150;          // gap before reopening the recogniser
+  var TRACE_MAX = 80;                  // events kept for the diagnostic panel
+  // A frozen countdown must never strand a finished turn if the microphone
+  // does not come back at all.
+  var FREEZE_MAX_MS = 5000;
+
+  // Extra grace when the buffered turn ends on a word no sentence can end on.
+  // Costs a finished sentence nothing.
+  var DANGLING_EXTRA_MS = 1500;
   var IDLE_AUTO_END_MS = 180000;       // 3 min of silence ends the session
   var MAX_SESSION_MS = 20 * 60 * 1000;
   var DUP_WINDOW_MS = 15000;           // repeated identical final inside this = duplicate
@@ -327,7 +339,11 @@
   //
   // It does not add latency to a finished turn beyond this window, because
   // nothing waits on it except the decision that he is done.
-  var TURN_SILENCE_MS = 1500;
+  // RAISED after the phone test: 1500ms still cut Luis off on real hardware.
+  // Top of the range asked for, and it now runs only while the microphone can
+  // actually hear -- the countdown is frozen across Android's session
+  // teardown, so a pause no longer races our own deafness.
+  var TURN_SILENCE_MS = 1800;
 
   // A stuck interim stream must not hold a turn open forever.
   var TURN_MAX_MS = 20000;
@@ -376,6 +392,53 @@
 
   // NOTE: there is deliberately NO fixed silence timer. End-of-turn comes from
   // the recogniser's own endpointer (result.isFinal).
+
+  // ==========================================================================
+  // EVENT TRACE
+  // ==========================================================================
+  // The offline harness models an engine, not a phone. Two failures were only
+  // visible on real hardware, so the page records its own event sequence and
+  // shows it in the diagnostic panel: the next physical test produces evidence
+  // instead of guesses.
+  //
+  // Only event names, timings and counts are recorded. Transcript text is
+  // truncated hard, and nothing here is transmitted anywhere -- the trace
+  // lives in memory on Luis's phone and dies with the page.
+  var trace = [];
+  var traceT0 = 0;
+
+  function traceEvent(name, detail) {
+    var now = Date.now();
+    if (!traceT0) traceT0 = now;
+    var prev = trace.length ? trace[trace.length - 1].at : now;
+    trace.push({
+      at: now,
+      since: now - traceT0,
+      gap: now - prev,
+      name: name,
+      detail: detail === undefined ? "" : String(detail)
+    });
+    if (trace.length > TRACE_MAX) trace = trace.slice(-TRACE_MAX);
+  }
+
+  function traceReset() { trace = []; traceT0 = 0; }
+
+  // Truncated hard: enough to follow a merge, never a full transcript.
+  function snip(text) {
+    var s2 = String(text || "").replace(/\s+/g, " ").trim();
+    return s2.length > 24 ? s2.slice(0, 24) + "~" : s2;
+  }
+
+  function traceLines() {
+    if (!trace.length) return ["(no events yet)"];
+    var out = [];
+    for (var i = trace.length - 1; i >= 0 && out.length < 26; i--) {
+      var e = trace[i];
+      out.push("  +" + String(e.since).padStart(6) + "ms  (+" + String(e.gap).padStart(5) +
+               ")  " + e.name + (e.detail ? "  " + e.detail : ""));
+    }
+    return out;
+  }
 
   // ===== BEGIN PURE HELPERS (extracted verbatim by the offline test suite) ==
 
@@ -540,6 +603,9 @@
     var timer = null;
     var startedAt = 0;
     var handler = null;
+    var deadline = 0;
+    var frozen = false;
+    var remaining = 0;
 
     function cancelTimer() {
       if (timer !== null) { try { clrT(timer); } catch (e) {} timer = null; }
@@ -561,11 +627,14 @@
       if (!startedAt) startedAt = now();
       cancelTimer();
       var wait = silenceMs;
+      if (typeof o.extraFor === "function") wait += (o.extraFor(buffer) || 0);
       if (maxMs) {
         var left = (startedAt + maxMs) - now();
         if (left <= 0) { emit(); return; }
         if (left < wait) wait = left;
       }
+      deadline = now() + wait;
+      frozen = false;
       timer = setT(emit, wait);
     }
 
@@ -598,13 +667,69 @@
         this.seed(text);
         if (buffer) arm(onTurn);
       },
-      discard: function () { cancelTimer(); buffer = ""; startedAt = 0; handler = null; },
+      // ---- FREEZING THE COUNTDOWN WHILE THE MICROPHONE IS DEAF ----------
+      // Android Chrome ends the recognition session at its own endpointer even
+      // with continuous = true, and reopening it takes time. During that gap
+      // the page cannot hear Luis resume, so a silence timer left running is
+      // counting silence it has no way to disprove. That is the race that
+      // submitted "Panchita quiero que me ayudes" while he was mid-thought.
+      // The countdown is therefore suspended whenever we are not listening,
+      // and resumes with the time it had left once audio is flowing again.
+      hold: function () {
+        if (frozen || timer === null) return false;
+        remaining = deadline - now();
+        if (remaining < 0) remaining = 0;
+        cancelTimer();
+        frozen = true;
+        return true;
+      },
+      release: function () {
+        if (!frozen) return false;
+        frozen = false;
+        if (!buffer) { remaining = 0; return false; }
+        deadline = now() + remaining;
+        timer = setT(emit, remaining);
+        return true;
+      },
+      isFrozen: function () { return frozen; },
+      remainingMs: function () {
+        if (frozen) return remaining;
+        return timer === null ? 0 : Math.max(0, deadline - now());
+      },
+      discard: function () {
+        cancelTimer(); buffer = ""; startedAt = 0; handler = null;
+        frozen = false; remaining = 0; deadline = 0;
+      },
       // Is a submission actually pending? A buffer seeded across the TTS gate
       // is NOT armed until real speech follows it.
       isArmed: function () { return timer !== null; },
       hasPending: function () { return buffer.length > 0; },
       peek: function () { return buffer; }
     };
+  }
+
+  // A sentence cannot end on these. When the buffered turn does, Luis is
+  // mid-thought -- "quiero que me ayudes CON...", "necesito QUE..." -- and the
+  // pause that follows is him thinking, not him finishing. Extending the grace
+  // only in this case buys a long thinking pause without adding a single
+  // millisecond to a turn that actually sounds finished.
+  var DANGLING_WORDS = [
+    "a", "al", "ante", "con", "contra", "de", "del", "desde", "durante", "en",
+    "entre", "hacia", "hasta", "para", "por", "segun", "sin", "sobre", "tras",
+    "y", "e", "o", "u", "ni", "que", "qué", "como", "cuando", "donde", "porque",
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "lo", "mi", "mis",
+    "tu", "tus", "su", "sus", "me", "te", "se", "nos", "le", "les",
+    "and", "or", "the", "a", "an", "of", "to", "for", "with", "about", "my",
+    "your", "is", "are", "that", "which", "when", "where", "because"
+  ];
+
+  function endsIncomplete(text) {
+    var n = normalizeSpeech(text);
+    if (!n) return false;
+    var words = n.split(" ");
+    var last = words[words.length - 1];
+    if (!last) return false;
+    return DANGLING_WORDS.indexOf(last) >= 0;
   }
 
   // Denial classification. Production treats ANY denied status as session
@@ -649,6 +774,11 @@
     lastInterim: "",       // unfinalised words, kept so a restart cannot lose them
     quarantine: "",        // an interruption heard while her speaker was live
     quarantineAt: 0,
+    listening: false,      // audio is genuinely flowing into the recogniser
+    micStream: null,       // held for the session so restarts do not re-acquire
+    recSeq: 0,
+    thawTimer: null,
+    startedAt: 0,
     quarantineConfirmed: false,   // proven human: heard after her speaker died
     speakerStoppedAt: 0,
     prefixTimer: null,
@@ -662,14 +792,20 @@
     speakTimer: null,
     dedupe: createDedupe(DUP_WINDOW_MS, 12),
     echo: createEchoGuard(ECHO_WINDOW_MS),
-    assembler: createTurnAssembler(TURN_SILENCE_MS, { maxMs: TURN_MAX_MS }),
+    assembler: createTurnAssembler(TURN_SILENCE_MS, {
+      maxMs: TURN_MAX_MS,
+      extraFor: function (buffered) {
+        return endsIncomplete(buffered) ? DANGLING_EXTRA_MS : 0;
+      }
+    }),
     gate: "open",          // open | held  -- held whenever her speaker is live
     ttsEpoch: 0,
     gateTimer: null,
     recentTurns: [],
     stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0,
              stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0,
-             carried: 0, prefixDropped: 0, onsets: 0 }
+             carried: 0, prefixDropped: 0, onsets: 0,
+             built: 0, started: 0, ended: 0, noSpeech: 0, aborted: 0, micAcquired: 0 }
   };
 
   var STR = {
@@ -834,6 +970,15 @@
     d["mic-diag"].classList.toggle("visible", diagVisible);
     renderDiag();
   });
+  // Recogniser restarts per minute since voice started. While Luis is silent
+  // this is the churn rate to compare against how often he hears a click.
+  function restartRate() {
+    if (!v.startedAt) return "0.0";
+    var mins = (Date.now() - v.startedAt) / 60000;
+    if (mins <= 0.02) return "-";
+    return (v.stats.restarts / mins).toFixed(1);
+  }
+
   function renderDiag() {
     if (!diagVisible) return;
     d["mic-diag"].textContent = [
@@ -851,6 +996,11 @@
       "manually muted: " + v.muted,
       "turn buffered: " + JSON.stringify(v.assembler.peek()),
       "silence grace: " + TURN_SILENCE_MS + "ms (resets on speech)",
+      "dangling extra: " + (endsIncomplete(v.assembler.peek()) ? DANGLING_EXTRA_MS + "ms ACTIVE" : "0ms"),
+      "timer left: " + v.assembler.remainingMs() + "ms" +
+        (v.assembler.isFrozen() ? " [FROZEN: mic deaf]" : ""),
+      "mic listening: " + v.listening,
+      "mic stream held: " + !!v.micStream,
       "interruption held: " + JSON.stringify(v.quarantine),
       "interruption confirmed: " + v.quarantineConfirmed,
       "speaker stopped at: " + (v.speakerStoppedAt ? (Date.now() - v.speakerStoppedAt) + "ms ago" : "n/a"),
@@ -861,12 +1011,23 @@
       "barge-ins: " + v.stats.bargeIns,
       "mic resets after tts: " + v.stats.micResets,
       "breaker: " + v.stats.breaker,
+      "-- recogniser lifecycle (click suspects) --",
+      "built: " + v.stats.built,
+      "started: " + v.stats.started,
+      "ended: " + v.stats.ended,
+      "restarts: " + v.stats.restarts,
+      "aborted: " + v.stats.aborted,
+      "no-speech: " + v.stats.noSpeech,
+      "restart rate: " + restartRate() + "/min",
+      "mic acquisitions: " + v.stats.micAcquired,
       "interims ignored: " + v.stats.interims,
       "finals coalesced: " + v.stats.coalesced,
       "stale callbacks ignored: " + v.stats.stale,
       "engine endpointing: advisory only (never ends a turn)",
-      "turn max: " + TURN_MAX_MS + "ms"
-    ].join("\n");
+      "turn max: " + TURN_MAX_MS + "ms",
+      "",
+      "-- event trace, newest first --"
+    ].concat(traceLines()).join("\n");
   }
 
   // ==========================================================================
@@ -1077,6 +1238,16 @@
     if (!merged) return;
     v.quarantine = merged;
     v.quarantineAt = now || Date.now();
+  }
+
+  // Drop the held capture stream. Called wherever listening genuinely stops.
+  function releaseMicStream() {
+    if (!v.micStream) return;
+    try {
+      v.micStream.getTracks().forEach(function (tr) { try { tr.stop(); } catch (e) {} });
+    } catch (e) { /* non-fatal */ }
+    v.micStream = null;
+    traceEvent("mic.release");
   }
 
   function clearInterruption() {
@@ -1318,6 +1489,33 @@
     r.continuous = true;        // <-- production uses false; this is the change
     r.interimResults = true;
     r.lang = state.lang === "es" ? "es-ES" : "en-US";
+    r.__id = ++v.recSeq;
+    v.stats.built++;
+    traceEvent("rec.build", "#" + r.__id);
+
+    // The session is running. Audio is flowing again, so the silence countdown
+    // that was frozen across the restart gap picks up where it left off.
+    r.onstart = function () {
+      if (v.rec !== r) { v.stats.stale++; traceEvent("rec.start.STALE", "#" + r.__id); return; }
+      v.stats.started++;
+      v.listening = true;
+      traceEvent("rec.start", "#" + r.__id);
+      if (v.assembler.release()) traceEvent("timer.resume", v.assembler.remainingMs() + "ms left");
+      renderDiag();
+    };
+
+    r.onaudiostart = function () {
+      if (v.rec !== r) return;
+      v.listening = true;
+      traceEvent("audio.start", "#" + r.__id);
+      if (v.assembler.release()) traceEvent("timer.resume", v.assembler.remainingMs() + "ms left");
+    };
+
+    r.onaudioend = function () {
+      if (v.rec !== r) return;
+      v.listening = false;
+      traceEvent("audio.end", "#" + r.__id);
+    };
 
     // Speech onset. The earliest signal the engine gives us that Luis has
     // started talking -- earlier than any transcript -- so it is what makes
@@ -1325,6 +1523,7 @@
     // the instant he resumes after a pause.
     r.onspeechstart = function () {
       if (v.rec !== r) { v.stats.stale++; return; }
+      traceEvent("speech.start", "#" + r.__id);
       if (!v.active || v.muted) return;
       v.userSpeaking = true;
       touchIdle();
@@ -1345,8 +1544,12 @@
     // The engine thinks speech stopped. This is exactly the signal that was
     // cutting Luis off, so it is NOT treated as end of turn -- it only marks
     // him as paused. The resettable silence window decides when he is done.
+    // The engine's endpointer. ADVISORY ONLY -- it marks Luis paused, never
+    // finished. On Android this is immediately followed by onend, which is the
+    // real problem: the session dies here and we go deaf.
     r.onspeechend = function () {
       if (v.rec !== r) { v.stats.stale++; return; }
+      traceEvent("speech.end", "#" + r.__id);
       v.userSpeaking = false;
       renderVoice();
     };
@@ -1372,6 +1575,7 @@
         // restart instead of being dropped.
         if (!res.isFinal) {
           v.stats.interims++;
+          if (v.stats.interims % 4 === 1) traceEvent("interim", snip(text));
           v.userSpeaking = true;
           if (v.gate === "held") {
             // Earliest safe barge-in: an unfinalised hypothesis that is not
@@ -1418,10 +1622,12 @@
         // turn buffer, as defence in depth behind the gate.
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
 
+        traceEvent("FINAL", snip(text));
         v.lastInterim = "";
         touchIdle();
         if (v.assembler.hasPending()) v.stats.coalesced++;
         v.assembler.pushFinal(text, onAssembledTurn);
+        traceEvent("timer.arm", v.assembler.remainingMs() + "ms");
       }
       renderVoice();
     };
@@ -1429,7 +1635,9 @@
     r.onerror = function (ev) {
       if (v.rec !== r) { v.stats.stale++; return; }
       var code = ev && ev.error;
-      if (code === "no-speech" || code === "aborted") return;   // normal
+      traceEvent("rec.error", code);
+      if (code === "no-speech") { v.stats.noSpeech++; return; }   // normal, and
+      if (code === "aborted") { v.stats.aborted++; return; }      // very frequent
       v.stats.errors++;
       if (code === "not-allowed" || code === "service-not-allowed") { failVoice(t("permissionDenied")); return; }
       if (code === "audio-capture") { failVoice(t("noMic")); return; }
@@ -1440,30 +1648,54 @@
     r.onend = function () {
       // Android Chrome ends continuous sessions on its own schedule. Reopening
       // is what keeps the microphone available for the whole conversation.
-      if (v.rec !== r) { v.stats.stale++; return; }
+      if (v.rec !== r) { v.stats.stale++; traceEvent("rec.end.STALE", "#" + r.__id); return; }
+      v.stats.ended++;
+      v.listening = false;
+      traceEvent("rec.end", "#" + r.__id);
       if (!v.active || v.stopping || v.muted) return;
       v.userSpeaking = false;
+
       // Android ends the session on its own schedule, sometimes mid-sentence
       // and without finalising what it had. Fold the last interim into the
       // turn so those words are not lost across the restart; the cumulative
       // merge collapses it again if the engine re-states it afterwards.
       if (v.gate !== "held" && v.lastInterim) {
         v.assembler.resume(v.lastInterim, onAssembledTurn);
+        traceEvent("interim.rescued", snip(v.lastInterim));
         v.lastInterim = "";
       }
+
+      // FREEZE THE SILENCE COUNTDOWN. From here until the next session is
+      // actually listening we cannot hear Luis, so we must not spend his
+      // grace period. This is the fix for the natural-pause failure: the
+      // countdown used to keep running through the deaf gap and fire while
+      // he was still mid-thought.
+      if (v.assembler.hold()) traceEvent("timer.freeze", v.assembler.remainingMs() + "ms left");
+
       if (v.restartTimer) clearTimeout(v.restartTimer);
       v.restartTimer = setTimeout(function () {
         v.restartTimer = null;
         if (v.rec !== r) { v.stats.stale++; return; }
         if (!v.active || v.stopping || v.muted) return;
         v.stats.restarts++;
+        traceEvent("rec.restart", "#" + r.__id);
         try { v.rec.start(); }
         catch (e) {
+          traceEvent("rec.restart.throw", String(e && e.name || e));
           try { v.rec = buildRecognizer(); v.rec.start(); }
-          catch (e2) { failVoice(t("voiceFailed")); }
+          catch (e2) { failVoice(t("voiceFailed")); return; }
         }
         renderDiag();
       }, RESTART_DELAY_MS);
+
+      // If the microphone never comes back, the buffered turn must not be
+      // stranded frozen forever.
+      if (v.thawTimer) clearTimeout(v.thawTimer);
+      v.thawTimer = setTimeout(function () {
+        v.thawTimer = null;
+        if (!v.active || v.muted) return;
+        if (v.assembler.release()) traceEvent("timer.thaw", "restart never landed");
+      }, FREEZE_MAX_MS);
     };
 
     return r;
@@ -1544,14 +1776,31 @@
     v.gate = "open";
     v.ttsEpoch++;
     v.recentTurns = [];
+    traceReset();
+    v.stats.built = 0; v.stats.started = 0; v.stats.ended = 0;
+    v.stats.restarts = 0; v.stats.aborted = 0; v.stats.noSpeech = 0;
     v.stopping = false;
     v.muted = false;
 
     // Probe permission first so a denial is reported clearly instead of
     // hanging silently, which is the known Android Chrome failure mode.
+    //
+    // The stream is now HELD for the life of the voice session instead of
+    // being stopped immediately. Android ends and reopens the recognition
+    // session every few seconds, and each reopen used to re-acquire the
+    // microphone from scratch -- a fresh capture route and audio-focus
+    // transition every time. That churn is the leading suspect for the
+    // repeated clicks Luis hears while the page is simply listening. Holding
+    // one stream keeps the capture route warm across those restarts.
+    //
+    // It is released by mute, End voice, backgrounding and failure, so the
+    // microphone is never held while the UI is not showing an active session.
     var probe = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
-      ? navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
-          try { s.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
+      ? navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+          releaseMicStream();
+          v.micStream = stream;
+          v.stats.micAcquired++;
+          traceEvent("mic.hold", "stream acquired");
         })
       : Promise.resolve();
 
@@ -1560,6 +1809,8 @@
         v.rec = buildRecognizer();
         v.rec.start();
         v.active = true;
+        v.startedAt = Date.now();
+        traceEvent("voice.start");
         setPhase("listening");
         armIdle(); armMax();
       } catch (e) { failVoice(t("voiceFailed")); }
@@ -1586,7 +1837,9 @@
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       if (v.rec) { try { v.rec.abort(); } catch (e) {} }
       v.rec = null;                      // any late callback is now stale
+      releaseMicStream();              // a real mute releases the device
       v.muted = true;
+      traceEvent("mute.on");
       setPhase("listening");           // phase is the assistant; mute is the user
       renderVoice();
     } else {
@@ -1599,6 +1852,16 @@
       clearGateTimer();
       v.gate = "open";
       v.ttsEpoch++;
+      v.muted = false;
+      traceEvent("mute.off");
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+          releaseMicStream();
+          v.micStream = stream;
+          v.stats.micAcquired++;
+          traceEvent("mic.hold", "stream reacquired");
+        }, function () { /* the recogniser will report a real denial */ });
+      }
       try { v.rec = buildRecognizer(); v.rec.start(); setPhase("listening"); touchIdle(); }
       catch (e) { failVoice(t("voiceFailed")); }
     }
@@ -1614,6 +1877,10 @@
     clearTimers();
     stopSpeaking();
     // Anything still buffered mid-sentence dies with the session.
+    releaseMicStream();
+    if (v.thawTimer) { clearTimeout(v.thawTimer); v.thawTimer = null; }
+    v.listening = false;
+    traceEvent("voice.end");
     v.assembler.discard();
     clearInterruption();
     if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
@@ -1689,6 +1956,8 @@
     if (!v.active || v.muted) return;
     if (document.visibilityState === "hidden") {
       v.backgrounded = true;
+      traceEvent("page.hidden");
+      releaseMicStream();
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       var held = v.rec;
       v.rec = null;                          // late callbacks are stale
@@ -1696,6 +1965,15 @@
       stopSpeaking();
     } else if (v.backgrounded) {
       v.backgrounded = false;
+      traceEvent("page.visible");
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+          releaseMicStream();
+          v.micStream = stream;
+          v.stats.micAcquired++;
+          traceEvent("mic.hold", "stream reacquired");
+        }, function () { /* the recogniser will report a real denial */ });
+      }
       if (!v.rec) {
         try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
         catch (e) {

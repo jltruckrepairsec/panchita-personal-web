@@ -14,7 +14,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { createApp } = require("./harness.js");
 
-const GRACE_MS = 1500;      // TURN_SILENCE_MS in voice-v2.html
+const GRACE_MS = 1800;   // TURN_SILENCE_MS in voice-v2.html
 
 function app(answer) {
   return createApp({

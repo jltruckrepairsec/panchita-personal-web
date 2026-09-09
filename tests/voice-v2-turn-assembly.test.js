@@ -14,7 +14,7 @@ const assert = require("node:assert");
 const { createApp } = require("./harness.js");
 
 const BURST = ["Panchita", "Panchita quiero", "Panchita quiero que", "Panchita quiero que me ayudes"];
-const GRACE_MS = 1500;   // TURN_SILENCE_MS in voice-v2.html
+const GRACE_MS = 1800;   // TURN_SILENCE_MS in voice-v2.html
 
 async function live(opts) {
   const a = createApp(opts);
@@ -328,6 +328,6 @@ test("voice cannot start without a session", async () => {
 test("the silence grace period is declared, and engine endpointing is advisory", async () => {
   const a = await live();
   const diag = a.diag();
-  assert.match(diag["silence grace"], /^1500ms \(resets on speech\)$/);
+  assert.match(diag["silence grace"], /^1800ms \(resets on speech\)$/);
   assert.strictEqual(diag["engine endpointing"], "advisory only (never ends a turn)");
 });
