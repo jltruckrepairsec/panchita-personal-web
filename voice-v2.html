@@ -26,6 +26,23 @@
     * Mute / End voice session controls.
     * Duplicate-final suppression and an echo guard, so the open microphone
       cannot re-submit Luis's words twice or transcribe Panchita herself.
+    * ANDROID TURN ASSEMBLY (this revision). Android Chrome delivers one
+      spoken turn as a burst of CUMULATIVE final hypotheses --
+        "Panchita" -> "Panchita quiero" -> "Panchita quiero que" -> ...
+      -- and each one used to become its own Gateway request, so a single
+      sentence fired four times and could trip the rate limiter. Those
+      hypotheses are now coalesced locally and one finished turn produces
+      exactly one submission. Interim hypotheses are dropped outright.
+      FINAL_COALESCE_MS is the width of that burst ONLY. It is provisional
+      hardware-test scaffolding, it is not semantic end-of-turn, and it is
+      not a reinstatement of the removed fixed silence timer.
+    * STALE CALLBACK PROTECTION (this revision). Aborted, replaced, muted or
+      ended recognisers can still fire queued events; every recogniser
+      callback now returns unless it belongs to the recogniser the session
+      currently owns, so a stale callback can never submit.
+
+  STILL OPEN: the long natural-pause problem is NOT solved here and must be
+  verified physically on Android hardware.
 
   COST: $0. No API key, no new vendor, no new data processor. Web Speech and
   speechSynthesis are the same free browser capabilities production already
@@ -231,6 +248,22 @@
   var MAX_SESSION_MS = 20 * 60 * 1000;
   var DUP_WINDOW_MS = 15000;           // repeated identical final inside this = duplicate
   var ECHO_WINDOW_MS = 9000;           // how long Panchita's words stay echo-suspect
+
+  // Android Chrome emits ONE spoken turn as a burst of cumulative isFinal
+  // hypotheses that arrive milliseconds apart:
+  //     "Panchita" -> "Panchita quiero" -> "Panchita quiero que" -> ...
+  // Each of those was previously submitted to Gateway on its own, so a single
+  // sentence produced four requests and could trip the rate limiter.
+  // FINAL_COALESCE_MS is the width of that burst, and nothing more.
+  //
+  // IT IS NOT AN END-OF-TURN TIMER. It is not semantic. It does not replace
+  // the prohibited fixed silence timer, and it must not be raised to paper
+  // over a long natural pause: end-of-turn still comes from the recogniser's
+  // own endpointer (result.isFinal). This value only decides how long we wait
+  // to see whether the SAME hypothesis is about to be restated one word longer.
+  // PROVISIONAL: pending physical Android verification.
+  var FINAL_COALESCE_MS = 400;
+
   // NOTE: there is deliberately NO fixed silence timer. End-of-turn comes from
   // the recogniser's own endpointer (result.isFinal).
 
@@ -311,6 +344,72 @@
     };
   }
 
+  // Merges one incoming final hypothesis into the buffered text of the turn
+  // being assembled. Android restates the whole utterance each time it grows,
+  // so an incoming hypothesis that begins with everything already buffered is
+  // a RESTATEMENT and replaces the buffer; anything else is a genuinely new
+  // segment and is appended. Comparison is on normalised text so casing and
+  // punctuation drift between hypotheses cannot break the prefix match, but
+  // the returned string is always raw transcript text.
+  function mergeFinalHypotheses(buffered, incoming) {
+    var rawB = String(buffered || "").trim();
+    var rawI = String(incoming || "").trim();
+    if (!rawB) return rawI;
+    if (!rawI) return rawB;
+    var b = normalizeSpeech(rawB), i = normalizeSpeech(rawI);
+    if (!b) return rawI;
+    if (!i) return rawB;
+    if (i === b) return rawI.length >= rawB.length ? rawI : rawB;
+    if (i.indexOf(b + " ") === 0) return rawI;   // cumulative growth -> replace
+    if (b.indexOf(i + " ") === 0) return rawB;   // shorter restatement -> keep
+    return rawB + " " + rawI;                    // disjoint segment -> append
+  }
+
+  // Assembles the burst of cumulative final hypotheses that make up ONE spoken
+  // turn, and hands the finished text over exactly once. Interim hypotheses
+  // never get here — the caller drops them — so nothing unfinalised can ever
+  // reach Gateway through this path.
+  //
+  // Guarantees relied on by the regression suite:
+  //   * one spoken turn -> at most one onTurn call;
+  //   * every further hypothesis inside the burst restarts the window rather
+  //     than emitting a second turn;
+  //   * discard() drops incomplete buffered speech and cancels the pending
+  //     emit, so mute, End voice and a stale recogniser submit nothing.
+  // Timer functions are injectable so the offline suite can drive this
+  // deterministically without wall-clock waits.
+  function createTurnAssembler(coalesceMs, opts) {
+    var o = opts || {};
+    var setT = o.setTimeout || function (fn, ms) { return setTimeout(fn, ms); };
+    var clrT = o.clearTimeout || function (id) { return clearTimeout(id); };
+    var buffer = "";
+    var timer = null;
+
+    function cancelTimer() {
+      if (timer !== null) { try { clrT(timer); } catch (e) {} timer = null; }
+    }
+
+    return {
+      // Accepts ONE final hypothesis of the turn currently being spoken.
+      pushFinal: function (text, onTurn) {
+        var incoming = String(text || "").trim();
+        if (!incoming) return;
+        buffer = mergeFinalHypotheses(buffer, incoming);
+        cancelTimer();
+        timer = setT(function () {
+          timer = null;
+          var out = buffer;
+          buffer = "";
+          if (out && typeof onTurn === "function") onTurn(out);
+        }, coalesceMs);
+      },
+      // Incomplete speech is thrown away, never submitted.
+      discard: function () { cancelTimer(); buffer = ""; },
+      hasPending: function () { return buffer.length > 0; },
+      peek: function () { return buffer; }
+    };
+  }
+
   // Denial classification. Production treats ANY denied status as session
   // expiry and forces re-login; the Gateway already returns error.detail, so
   // this is a client-only correction. The server remains authoritative.
@@ -353,7 +452,8 @@
     speakTimer: null,
     dedupe: createDedupe(DUP_WINDOW_MS, 12),
     echo: createEchoGuard(ECHO_WINDOW_MS),
-    stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0 }
+    assembler: createTurnAssembler(FINAL_COALESCE_MS),
+    stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0, stale: 0, coalesced: 0 }
   };
 
   var STR = {
@@ -504,13 +604,18 @@
     if (!diagVisible) return;
     d["mic-diag"].textContent = [
       "engine: web speech (free)   paid realtime: " + PAID_REALTIME_ENABLED,
-      "voice active: " + v.active + "   phase: " + v.phase,
+      "voice active: " + v.active,
+      "phase: " + v.phase,
       "turns sent: " + v.stats.turns,
       "duplicates suppressed: " + v.stats.dups,
       "echoes suppressed: " + v.stats.echoes,
       "recogniser restarts: " + v.stats.restarts,
       "errors: " + v.stats.errors,
-      "fixed silence timer: NONE (engine endpointing)"
+      "interims ignored: " + v.stats.interims,
+      "finals coalesced: " + v.stats.coalesced,
+      "stale callbacks ignored: " + v.stats.stale,
+      "fixed silence timer: NONE (engine endpointing)",
+      "final-burst coalesce: " + FINAL_COALESCE_MS + "ms (not end-of-turn)"
     ].join("\n");
   }
 
@@ -757,31 +862,39 @@
     r.lang = state.lang === "es" ? "es-ES" : "en-US";
 
     r.onresult = function (ev) {
-      if (!v.active || v.phase === "muted") return;
+      // Stale-callback protection. A recogniser that has been aborted, replaced
+      // on restart, muted or ended can still deliver queued events. Only the
+      // recogniser this session currently owns may speak for it.
+      if (v.rec !== r) { v.stats.stale++; return; }
+      if (!v.active || v.paused || v.phase === "muted") return;
       var now = Date.now();
       // Continuous mode accumulates results; only walk the new ones.
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var res = ev.results[i];
-        if (!res.isFinal) continue;
+        // Interim hypotheses are counted and dropped. They are never buffered
+        // and can never reach Gateway.
+        if (!res.isFinal) { v.stats.interims++; continue; }
         var text = (res[0] && res[0].transcript) ? res[0].transcript : "";
         if (!text.trim()) continue;
 
+        // Echo is rejected per hypothesis so Panchita's own words never enter
+        // the turn buffer in the first place.
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
-        if (v.dedupe.isDuplicate(text, now)) { v.stats.dups++; renderDiag(); continue; }
-        v.dedupe.remember(text, now);
 
         touchIdle();
-        // Barge-in, on a verified non-echo transcript: safe because Panchita's
-        // own voice can never reach this point.
-        if (v.phase === "speaking" || v.phase === "thinking") {
-          stopSpeaking();
-          v.turnSeq++;                     // discard the superseded answer
-        }
-        submitTurn(text, true);
+        // Barge-in stays immediate: she stops talking on the first real word.
+        // The submission itself still waits for the turn to be assembled, so
+        // the burst cannot become several Gateway requests.
+        if (v.phase === "speaking") stopSpeaking();
+
+        if (v.assembler.hasPending()) v.stats.coalesced++;
+        v.assembler.pushFinal(text, onAssembledTurn);
       }
+      renderDiag();
     };
 
     r.onerror = function (ev) {
+      if (v.rec !== r) { v.stats.stale++; return; }
       var code = ev && ev.error;
       if (code === "no-speech" || code === "aborted") return;   // normal
       v.stats.errors++;
@@ -794,10 +907,12 @@
     r.onend = function () {
       // Android Chrome ends continuous sessions on its own schedule. Reopening
       // is what keeps the microphone available for the whole conversation.
+      if (v.rec !== r) { v.stats.stale++; return; }
       if (!v.active || v.stopping || v.paused) return;
       if (v.restartTimer) clearTimeout(v.restartTimer);
       v.restartTimer = setTimeout(function () {
         v.restartTimer = null;
+        if (v.rec !== r) { v.stats.stale++; return; }
         if (!v.active || v.stopping || v.paused) return;
         v.stats.restarts++;
         try { v.rec.start(); }
@@ -810,6 +925,37 @@
     };
 
     return r;
+  }
+
+  // The single point at which a finished spoken turn becomes a Gateway
+  // request. Called at most once per turn by the assembler.
+  function onAssembledTurn(text) {
+    // Voice may have been muted or ended while the burst window was open.
+    // Incomplete speech from a session that is no longer listening is dropped.
+    if (!v.active || v.paused || v.phase === "muted") return;
+
+    var now = Date.now();
+    if (v.echo.isEcho(text, now)) {
+      v.stats.echoes++;
+      if (v.phase === "speaking") setPhase("listening");
+      renderDiag();
+      return;
+    }
+    if (v.dedupe.isDuplicate(text, now)) {
+      v.stats.dups++;
+      if (v.phase === "speaking") setPhase("listening");
+      renderDiag();
+      return;
+    }
+    v.dedupe.remember(text, now);
+
+    touchIdle();
+    // Barge-in: an answer already in flight or being spoken is superseded.
+    if (v.phase === "speaking" || v.phase === "thinking") {
+      stopSpeaking();
+      v.turnSeq++;                       // discard the superseded answer
+    }
+    submitTurn(text, true);
   }
 
   // ---- One tap starts a whole conversation --------------------------------
@@ -826,6 +972,7 @@
 
     v.dedupe.reset();
     v.echo.clear();
+    v.assembler.discard();
     v.stopping = false;
     v.paused = false;
 
@@ -857,12 +1004,16 @@
       v.paused = true;
       stopSpeaking();
       v.turnSeq++;
+      // Half-spoken words captured before the tap are discarded, not sent.
+      v.assembler.discard();
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       if (v.rec) { try { v.rec.abort(); } catch (e) {} }
+      v.rec = null;                      // any late callback is now stale
       setPhase("muted");
     } else {
       v.paused = false;
       v.dedupe.reset();
+      v.assembler.discard();
       try { v.rec = buildRecognizer(); v.rec.start(); setPhase("listening"); touchIdle(); }
       catch (e) { failVoice(t("voiceFailed")); }
     }
@@ -877,6 +1028,8 @@
     v.paused = false;
     clearTimers();
     stopSpeaking();
+    // Anything still buffered mid-sentence dies with the session.
+    v.assembler.discard();
     if (v.rec) { try { v.rec.abort(); } catch (e) { try { v.rec.stop(); } catch (e2) {} } }
     v.rec = null;
     v.echo.clear();
