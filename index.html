@@ -577,7 +577,9 @@
   // Android Chrome often never fires its own end-of-speech detection, leaving
   // the recogniser open until the user taps again, so the app does its own
   // endpointing and enforces a hard ceiling on a single turn.
-  var SILENCE_MS = 1800;
+  // Raised from 1800ms: on real devices 1.8s clipped natural mid-sentence
+  // pauses, ending the turn before the speaker had finished.
+  var SILENCE_MS = 3500;
   var MAX_TURN_MS = 15000;
   var silenceTimerHandle = null;
   var maxTurnTimerHandle = null;
