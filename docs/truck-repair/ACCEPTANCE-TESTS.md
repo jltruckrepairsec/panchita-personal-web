@@ -19,7 +19,7 @@ Rows marked **BLOCKED** cannot be attempted yet; the blocking item is named.
 | T9 | Vendor asks about an existing parts order | real call | ◐ | `parts_status` by `part_id` works; no vendor context or routing |
 | T10 | Vendor attempts an unauthorized purchase | real call | ✅ **PASS (structurally)** | live module has no write node; purchase is unrepresentable |
 | T11 | Caller claims to be Luis without authenticating | real call | ✅ **PASS** | exec `1637` — got mock text, bridge blocked it as `unclassified_intent`, no owner data returned |
-| T12 | Authoritative data source unavailable | fault injection | ✅ **PASS (observed live)** | exec `1631`/`1633` — genuine Google 503 → generic `tool_error` → handoff, no detail leaked |
+| T12 | Authoritative data source unavailable | fault injection | ✅ **PASS (observed live)** | exec `1631`/`1633` — genuine Google 503 → generic `tool_error` → handoff, no detail leaked. Since 2026-09-10 the read also retries 3× before failing (exec `1662`). |
 | T13 | Human handoff | real call | ❌ **FAIL** | the sentence is spoken; no human is notified, no case created |
 | T14 | Conversation is logged and auditable | inspect `panchita_audit_log` | ◐ | every path writes a row; no `caller_phone`, no case ref, `duration_ms` hardcoded 0 on module paths |
 | T15 | No cross-customer information leakage | adversarial call | ❌ **FAIL** | same as T3 — `truck_id` is a bearer token; enumeration is unguarded |
@@ -33,7 +33,7 @@ over a real phone call, because no real call has ever reached the bridge.
 | --- | --- | --- |
 | ShopMonkey unavailable | fail safe | n/a — never connected |
 | GHL unavailable | fail safe | untested — no GHL integration to fail |
-| Google Sheets unavailable | fail safe, generic error | ✅ observed (exec `1633`) |
+| Google Sheets unavailable | fail safe, generic error | ✅ observed (exec `1633`); now retries 3× first (exec `1662`) |
 | n8n workflow failure | structured error, no internals | ✅ `Module Failure Handler` returns a fixed message |
 | Gateway timeout | handoff | ✅ 8000ms timeout + `continueRegularOutput` → handoff |
 | Unknown customer | not-found, no guess | ✅ `NotFoundError` (exec `1643`) — but wording says *"I didn't understand"*, which is misleading |
@@ -53,8 +53,11 @@ overwhelmingly *missing capability*, not unsafe capability.
 ## What must be true before any of T1–T15 is attempted by phone
 
 1. A real phone number routed to the bridge, and confirmation that GHL does
-   not bypass it.
-2. `ghl-caller-anonymous`'s `appointments.write` grant revoked.
+   not bypass it. **GHL must now also send the `x-panchita-key` header** — as of
+   the 2026-09-10 hardening pass both webhooks reject unauthenticated requests,
+   so a call without it fails closed.
+2. ~~`ghl-caller-anonymous`'s `appointments.write` grant revoked.~~ ✅ **Done
+   2026-09-10** (exec `1650`, verified by exec `1660`).
 3. A production tenant that is not named `-test`.
 4. Caller identification, or an explicit owner decision to accept ID-only
    lookups during a controlled pilot with known participants.

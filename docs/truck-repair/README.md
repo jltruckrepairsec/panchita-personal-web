@@ -21,6 +21,7 @@ pilot, because a customer's information is not scoped to that customer.
 | [ESCALATION-MATRIX.md](ESCALATION-MATRIX.md) | Who receives what, and the handoff package |
 | [ACCEPTANCE-TESTS.md](ACCEPTANCE-TESTS.md) | T1–T15 physical checklist and failure-behaviour matrix |
 | [GO-LIVE-READINESS.md](GO-LIVE-READINESS.md) | Defect register, rollback points, owner actions, next step |
+| [HARDENING-2026-09-10.md](HARDENING-2026-09-10.md) | The five approved safety fixes: changes, version IDs, evidence, rollback |
 
 Offline tests for the same logic: [`tests/truck-repair/`](../../tests/truck-repair/).
 
@@ -40,15 +41,24 @@ injection because there is no model in it.
 implementation at all: emergency/tow, complaints, service requests, and caller
 identification. Human handoff is a spoken sentence that notifies nobody.
 
-**The two findings that matter most.**
+**Safety hardening applied 2026-09-10.** Five approved fixes are live: the
+anonymous caller's write permission revoked, a verified key required on both
+public webhooks, the stale Core v0.1 front door deactivated, the module's
+production-spreadsheet write draft quarantined, and retry added to the Sheets
+read. Details and rollback in [HARDENING-2026-09-10.md](HARDENING-2026-09-10.md).
+The go-live level is unchanged — hardening removed attack surface, it did not
+add the missing capability.
+
+**The two findings that matter most** (as originally found; the second is now fixed).
 
 1. **An emergency is answered as a database lookup.** "My truck is on fire on
    the highway" classifies as `truck_status` and the caller is told *"I didn't
    quite catch what you need."* (execution `1634`)
-2. **The live module cannot write, but its saved draft can.** The published
-   module has 20 nodes; the draft has 44, and the extra 24 are a real Google
-   Sheets write path aimed at the **production** spreadsheet. Today's strongest
-   safety property is one "publish" click deep.
+2. **The live module could not write, but its saved draft could.** The
+   published module had 20 nodes; the draft had 44, and the extra 24 were a
+   real Google Sheets write path aimed at the **production** spreadsheet — one
+   "publish" click deep. **Fixed 2026-09-10**: the draft was restored to the
+   published version, so that path now exists only in version history.
 
 **What is blocked.** ShopMonkey has never been connected — no credential, no
 node type, no workflow. GoHighLevel likewise. No real phone call has ever

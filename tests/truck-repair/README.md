@@ -20,6 +20,7 @@ No dependencies, no network, no credentials. The n8n instance is not contacted.
 | `core-logic-snapshot.js` | The pure decision logic copied verbatim out of the deployed Core Pipeline node, plus the live registry rows as audited. |
 | `authorization.test.js` | **Guard tests.** Invariants that must never break. |
 | `known-defects.test.js` | **Characterisation tests.** They assert the current, *wrong* behaviour on purpose. |
+| `gateway-key-gate.test.js` | Proof of the deployed webhook key gate, using locally generated key material. The production secret is never stored here. |
 
 ## Read this before trusting a green run
 
@@ -30,7 +31,11 @@ become. **When a defect is fixed, its test should fail.** That is the signal to
 delete the characterisation test and write the real assertion in
 `authorization.test.js`.
 
-`authorization.test.js` is the opposite: those 11 tests must stay green.
+`authorization.test.js` is the opposite: those 14 tests must stay green.
+
+This has already happened once. The 2026-09-10 hardening pass fixed defect H1,
+its characterisation test began failing, and it was deleted and replaced by
+three real assertions in `authorization.test.js`. That is the intended cycle.
 
 ## What these tests do NOT prove
 

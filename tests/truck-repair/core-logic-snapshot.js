@@ -117,13 +117,15 @@ function classifyMode(context) {
 
 function classifyRisk(intent) { return INTENT_SENSITIVITY[intent] || 'unknown'; }
 
-// The live registry as audited on 2026-09-10 (data table mTEaG68qHmalnOiE).
+// The live registry as audited on 2026-09-10, AFTER the hardening pass
+// (data table mTEaG68qHmalnOiE).
 const LIVE_REGISTRY = [
   { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'owner-test', role: 'owner', permissions: 'financial_data,customer_pii,employee_pii', modes: 'admin,business' },
   { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'employee-test', role: 'employee', permissions: '', modes: 'business' },
   { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'dryrun-test-owner', role: 'owner', permissions: 'financial_data,customer_pii,employee_pii,appointments.write', modes: 'admin,business' },
   { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'phase2b-execute-test', role: 'owner', permissions: 'appointments.write', modes: 'admin,business' },
-  { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'ghl-caller-anonymous', role: 'caller', permissions: 'appointments.write', modes: 'business' },
+  // appointments.write revoked 2026-09-10 (hardening fix 1, execution 1650).
+  { tenant_id: 'jl-truck-repair-test', tenant_active: true, user_id: 'ghl-caller-anonymous', role: 'caller', permissions: '', modes: 'business' },
 ];
 
 module.exports = {

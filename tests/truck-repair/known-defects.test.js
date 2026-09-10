@@ -64,20 +64,6 @@ test('C1b: substring matching makes the router blind to what the caller means', 
   }
 });
 
-test('H1: the anonymous phone caller holds appointments.write', () => {
-  // Registry row 5. Harmless today only because the LIVE module has no write
-  // node -- the grant itself is real and should be revoked.
-  //
-  // MUST BECOME: ghl-caller-anonymous holds no write permission at all.
-  const context = C.resolveContext(
-    { tenant_id: 'jl-truck-repair-test', user_id: 'ghl-caller-anonymous' },
-    C.LIVE_REGISTRY
-  );
-  assert.strictEqual(context.permissions.has('appointments.write'), true);
-  // And so the dry-run reschedule intent is authorized for an anonymous caller.
-  assert.doesNotThrow(() => C.checkAuthorization('appointments_reschedule', context));
-});
-
 test('M2: business_summary has no permission gate at all', () => {
   // Today it returns mock text, so nothing leaks. If it is ever wired to real
   // financial data, every anonymous caller reaches it.

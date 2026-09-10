@@ -1,5 +1,12 @@
 # PHASE J — Go-Live Readiness, Rollback Points, Owner Actions
 
+> **UPDATE 2026-09-10 — safety hardening pass applied.** Five approved fixes are
+> live; see [HARDENING-2026-09-10.md](HARDENING-2026-09-10.md) for changes,
+> version IDs, evidence and rollback. Status below is marked accordingly.
+> **H1, H2, M1, M6 are CLOSED. C3 is downgraded to HIGH, not closed.** The
+> go-live level is unchanged at LEVEL 1, because the hardening removed attack
+> surface rather than adding the missing capability.
+
 ## Verdict: **LEVEL 1 — INTERNAL TEST ONLY**
 
 Not Level 0: the architecture is real, the path works end to end, and the
@@ -41,27 +48,27 @@ customer, and there is currently no caller identification of any kind.
 | --- | --- | --- |
 | C1 | **No emergency handling.** A life-safety call is classified as a status lookup and answered "I didn't quite catch what you need." | exec `1634` |
 | C2 | **No caller identification.** `truck_id` acts as a bearer token; any caller gets any record. Cross-customer leakage is unguarded. | exec `1640` |
-| C3 | **Core's webhook is public and unauthenticated.** `panchita-core-v02` accepts any `tenant_id`/`user_id`; posting `owner-test` yields owner permissions. | node param `"authentication":"none"` |
+| ~~C3~~ → **HIGH** | ~~Core's webhook is public and unauthenticated.~~ **Partly fixed 2026-09-10**: both webhooks now require a verified `x-panchita-key` (exec 1656 — a forged owner claim without the key is rejected before Core runs). Still HIGH: a key holder can assert any `user_id`, so this is a perimeter control, not per-identity authentication. | exec `1656` |
 | C4 | **Handoff is theatre.** `human_handoff: true` notifies nobody and records no case. | code inspection, all handoff paths |
 
 ### HIGH
 
 | ID | Defect | Evidence |
 | --- | --- | --- |
-| H1 | `ghl-caller-anonymous` (every inbound caller) holds `appointments.write`. | registry row 5 |
-| H2 | **Unpublished draft would open a real production-spreadsheet write path.** Live module 20 nodes; draft 44, incl. `Execute Prod Synthetic Test Write` against the production sheet. One publish click away. | draft/active node diff |
+| ~~H1~~ **CLOSED** | ~~`ghl-caller-anonymous` holds `appointments.write`.~~ Revoked 2026-09-10; `permissions` is now empty. | exec `1650`, `1660` |
+| ~~H2~~ **CLOSED** | ~~Unpublished draft would open a real production-spreadsheet write path.~~ Draft restored to the published version 2026-09-10; the write path now exists only in version history, and draft == active on all three production workflows. | version `bc456f21` |
 | H3 | No `session_id` from the bridge → new session per utterance, no memory, **language can flip mid-call**. | execs `1631`/`1634`/`1637`/`1640` |
 
 ### MEDIUM
 
 | ID | Defect |
 | --- | --- |
-| M1 | No retry on any Google Sheets node; a transient 503 becomes a caller-visible failure (exec `1633`). |
+| ~~M1~~ **CLOSED** | ~~No retry on any Google Sheets node.~~ `retryOnFail` 3 tries / 1000ms added 2026-09-10; proven by controlled experiment (exec `1662`: 235ms → 2652ms), fail-closed path unchanged. |
 | M2 | `business_summary` has no permission gate and is reachable by anonymous callers (mock data today, real data later = leak). |
 | M3 | Not-found is spoken as *"I didn't understand you"*, which misleads the caller and the human who picks up. |
 | M4 | Every registry row is the `-test` tenant; the live phone path is hardcoded to it. |
 | M5 | `Trucks` sheet contains its own header row as a data row. |
-| M6 | Stale active front door: `Panchita Core v0.1 (POC)` still active and serving a webhook. |
+| ~~M6~~ **CLOSED** | ~~Stale active front door `Panchita Core v0.1 (POC)`.~~ Deactivated 2026-09-10; `activeVersionId: null`. |
 | M7 | Bridge discards Core's richer "what remains" sentence, so the required communication rule is only partly delivered by voice. |
 
 ---
@@ -88,7 +95,7 @@ offline tests only — `git revert` is sufficient and touches no running system.
 
 ## Recommended order of work
 
-**Stop-the-bleeding (safe, reversible, no new integrations):**
+**Stop-the-bleeding — ✅ COMPLETED 2026-09-10 (items 1–5).**
 
 1. Revoke `appointments.write` from `ghl-caller-anonymous` (H1) — one cell.
 2. Add HTTP header auth to `panchita-core-v02` and the bridge (C3).

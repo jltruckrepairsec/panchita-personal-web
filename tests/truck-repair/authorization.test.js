@@ -103,3 +103,39 @@ test('prompt injection in the message cannot change the authorization decision',
   assert.ok(e, 'and the caller is still denied');
   assert.strictEqual(e.kind, 'PermissionError');
 });
+
+// ---------------------------------------------------------------------------
+// Hardening pass, 2026-09-10. These replace characterisation tests that used
+// to assert the opposite. Each corresponds to a defect that is now fixed.
+// ---------------------------------------------------------------------------
+
+test('H1 FIXED: the anonymous phone caller now holds no permissions at all', () => {
+  // Was: permissions = 'appointments.write' on the identity every inbound
+  // caller is given. Revoked 2026-09-10 (execution 1650).
+  const context = ctx(anonymous);
+  assert.strictEqual(context.permissions.size, 0, 'anonymous caller must hold zero permissions');
+  assert.strictEqual(context.trusted_role, 'caller');
+});
+
+test('H1 FIXED: an anonymous caller can no longer reach the reschedule dry-run', () => {
+  // This mattered beyond the write itself: the dry-run response disclosed the
+  // appointment's CURRENT scheduled_for, so it leaked one customer's booking
+  // to any caller who guessed an appointment id.
+  const e = denies(() => C.checkAuthorization('appointments_reschedule', ctx(anonymous)));
+  assert.ok(e, 'appointments_reschedule must now be denied');
+  assert.strictEqual(e.kind, 'PermissionError');
+  assert.match(e.message, /appointments\.write/);
+});
+
+test('the revoke did not disturb any other identity in the registry', () => {
+  // Least privilege must not become "nobody can do anything" by accident.
+  const owner = ctx({ tenant_id: 'jl-truck-repair-test', user_id: 'owner-test' });
+  assert.strictEqual(owner.trusted_role, 'owner');
+  assert.strictEqual(owner.permissions.has('customer_pii'), true);
+  assert.strictEqual(owner.permissions.has('financial_data'), true);
+
+  const dryrun = ctx({ tenant_id: 'jl-truck-repair-test', user_id: 'dryrun-test-owner' });
+  assert.strictEqual(dryrun.permissions.has('appointments.write'), true);
+
+  assert.strictEqual(C.LIVE_REGISTRY.length, 5, 'all five registry rows still present');
+});
