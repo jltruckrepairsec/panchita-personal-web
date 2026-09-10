@@ -1,7 +1,8 @@
 # Vision
 
 > **Status:** stub — no source in this repository.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## Purpose of this page
 
@@ -27,6 +28,17 @@ That is an inference from the interface, not a stated vision.
 ## Open questions
 
 * Is Panchita a single-owner assistant permanently, or does it grow to staff?
-* Which business outcome is the first proof of value — truck repair operations,
-  real estate deal flow, or personal time?
-* What does Panchita refuse to do on the owner's behalf?
+  The answer decides whether
+  [04 · Permissions](../04-security/permissions.md) is urgent or theoretical.
+* Which business outcome is the first proof of value — truck repair operations
+  ([03](../03-modules/truck-repair.md)), real estate deal flow
+  ([03](../03-modules/real-estate.md)), or personal time?
+* What does Panchita refuse to do on the owner's behalf? That question is the
+  whole content of [04 · Guardian](../04-security/guardian.md).
+
+## Note on naming
+
+"Vision" is also the name of a long-term Panchita module in the owner's
+blueprint. This page is the *section* sense — the system's purpose — and the two
+must not be conflated. Unresolved owner decision; see
+[09 · Later](../09-backlog/later.md).

@@ -1,27 +1,37 @@
 # Now
 
-> **Derived from:** repository state @ `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Status:** sourced — derived from open work in the repository.
+> **Lifecycle:** PLANNING
+> **Basis:** `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ---
 
-## N1 — Run the Voice v2 hardware test
+## N1 — Resolve the two open hardware failures *(owned elsewhere)*
 
-**Blocks:** the Voice v2 merge, and therefore everything downstream of it.
+**Not this vault's work.** Recorded here because everything else about the voice
+path waits on it.
 
-Voice v2 is code-complete and its offline suite is green at 61/61. One question
-remains, and it cannot be answered offline: does Android's endpointer tolerate a
-long natural thinking pause mid-sentence?
+Hardware testing has run. Two failures are open against the deployed prototype:
 
-Protocol, device requirements and pass criteria:
-[06 · Physical Tests](../06-testing/physical-tests.md). PT-1 is the blocking
-test; PT-2 through PT-8 confirm the offline results hold on real audio.
+| # | Finding |
+| --- | --- |
+| H-1 | A natural conversational pause still causes premature submission |
+| H-2 | Repeated audible clicks while listening, both Luis and Panchita silent |
 
-**If PT-1 fails:** do not raise `FINAL_COALESCE_MS`. That rebuilds the timer
-ADR-005 deleted, and the test suite asserts the comment saying so. A failure is
-a design question about end-of-turn.
+Another session is diagnosing both. Detail:
+[06 · Physical Tests](../06-testing/physical-tests.md).
 
-**Done when:** PT-1 has a recorded result in
+**The vault's only job here** is to keep recording findings and to refrain from
+documenting the implementation as settled. When that session reports, the vault
+owes: a restatement of
+[D1](../07-change-history/deprecated.md#d1--the-fixed-silence-timer-silencems--3500),
+a resolution of
+[ADR-005](../07-change-history/architecture-decisions.md#adr-005--end-of-turn-belongs-to-the-recogniser-not-to-a-timer),
+and an entry in [05 · Research](../05-knowledge/research.md) for whatever causes
+H-2.
+
+**Done when:** H-1 and H-2 have recorded outcomes in
 [06 · Test Results](../06-testing/test-results.md).
 
 ---

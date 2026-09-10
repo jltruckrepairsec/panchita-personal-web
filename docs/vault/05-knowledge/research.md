@@ -1,8 +1,10 @@
 # Research
 
-> **Status:** partial — one real body of findings, learned from hardware rather
-> than reading.
-> **Last reviewed:** 2026-09-09
+> **Status:** partial — 7 established findings, plus 1 unexplained symptom
+> under diagnosis. All learned from hardware rather than from reading.
+> **Lifecycle:** HARDWARE FINDINGS
+> **Basis:** `ed568e6`, plus unresolved findings dated 2026-09-09
+> **Last reviewed:** 2026-09-10
 
 ## Android Chrome speech recognition
 
@@ -30,9 +32,10 @@ Production uses a fixed 3500 ms silence timer. Voice v2 removed it and relies on
 the recogniser's own endpointer, which is the only component that actually knows
 whether speech has finished.
 
-*Open:* whether Android's endpointer tolerates a long natural thinking pause
-mid-sentence is **unknown and untestable offline**. It is the one open question
-blocking Voice v2.
+*Resolved, badly:* it does **not** reliably tolerate a long natural thinking
+pause. Tested on hardware and confirmed twice — against the 400 ms coalesce
+window at `ed568e6`, and against its replacement at `149d94e`. Tracked as
+[H-1](../06-testing/physical-tests.md#h-1--a-natural-conversational-pause-still-causes-premature-submission).
 
 ### Callbacks outlive their recogniser
 
@@ -65,9 +68,33 @@ Opening the page from inside WhatsApp or Gmail lands in an in-app webview where
 the cause and tells the owner to open it in Chrome directly — a field-learned
 message, not boilerplate.
 
+## Unexplained — under diagnosis
+
+### Repeated audible clicks while listening
+
+Reported by the owner on 2026-09-10 against the deployed prototype at or after
+`149d94e`: repeated clicks are audible while Voice v2 is listening, **with both
+Luis and Panchita silent**.
+
+**No cause is established.** What the silence on both sides does rule out is
+speech handling — nothing is being recognised or spoken when it happens. That
+leaves recogniser lifecycle as the place to look, since continuous listening
+depends on repeatedly stopping and restarting the recogniser, but that is a
+direction to investigate and **not a finding**.
+
+It is recorded here rather than above because the section above is established
+behaviour and this is not. It moves up when it is understood.
+
+Tracked as
+[H-2](../06-testing/physical-tests.md#h-2--repeated-audible-clicks-while-listening).
+Under diagnosis in another session.
+
 ## What is not researched
 
 * iOS Safari: entirely untested. Unknown whether any of the above transfers.
 * Desktop browsers: untested.
 * Whether paid realtime voice would sidestep the endpointer problem outright.
   `PAID_REALTIME_ENABLED` exists and is `false`; nothing evaluates the trade.
+  This is worth more attention now than when it was written: the endpointer
+  problem has failed PT-1 twice, against two different mechanisms.
+  See [08 · Provider Costs](../08-cost-and-quality/provider-costs.md).

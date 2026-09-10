@@ -2,7 +2,8 @@
 
 > **Status:** stub — the module is not in this repository. An external
 > assistant skill describes the work.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## The business
 

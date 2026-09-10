@@ -2,7 +2,9 @@
 
 > **Status:** sourced — every standard below is derived from what the code and
 > tests already do, not from an aspiration.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** GOVERNING
+> **Basis:** `ed568e6`
+> **Last reviewed:** 2026-09-10
 
 ## Q1 — A bug is closed by a test that fails without the fix
 
@@ -32,8 +34,9 @@ needing setup does not.
 ## Q5 — Timing is asserted, not waited on
 
 The harness runs a fully controllable fake clock, so timing behaviour is tested
-deterministically. There is not one `sleep` in the suite, and 61 tests run in
-under a second.
+deterministically. There is not one `sleep` in the suite, and the whole of it
+runs in under a second — counts in
+[06 · Regression Tests](../06-testing/regression-tests.md).
 
 ## Q6 — Every ceiling has a test named after it
 
@@ -55,9 +58,13 @@ debugging paid off twice.
 
 ## Q9 — Provisional code says so, in the code
 
-`FINAL_COALESCE_MS` states what it is and what it must not be mistaken for, and
-a test asserts the statement. Where a value could be misread as something
+`FINAL_COALESCE_MS` stated what it was and what it must not be mistaken for, and
+a test asserted the statement. Where a value could be misread as something
 structural, the source has to say what it is not.
+
+The standard outlived the constant, which has since been removed. It is worth
+re-checking against whatever governs end-of-turn now, once that work settles —
+[02 · Voice v2](../02-development/voice-v2.md#current-state--active-development-do-not-treat-as-settled).
 
 ## Q10 — A guarantee in a commit message is a guarantee
 

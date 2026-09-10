@@ -1,8 +1,14 @@
 # Regression Tests
 
-> **Status:** sourced — 61 tests, all passing.
+> **Status:** sourced — 61 tests verified at `ed568e6`. `origin/main` carries
+> **74** and is under active development.
 > **Source:** `tests/` @ `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CURRENT TEST
+> **Basis:** `ed568e6` (61 tests, verified here). `origin/main` @ `149d94e` carries 74 — see *Current state*
+> **Last reviewed:** 2026-09-10
+
+> **Canonical page** for suite composition and test counts. Other pages link
+> here rather than restating numbers.
 
 ## Run
 
@@ -17,12 +23,21 @@ No dependencies, no install step, no network.
 The suite covers **only** `voice-v2.html`. `index.html` is not imported, not
 loaded and not touched by anything in it.
 
+### Composition at `ed568e6` (this vault's basis)
+
 | File | Tests | Covers |
 | --- | --- | --- |
 | `voice-v2-helpers.test.js` | 14 | The `BEGIN/END PURE HELPERS` block, extracted verbatim |
 | `voice-v2-turn-assembly.test.js` | 25 | Android turn assembly, and the behaviour it must not break |
 | `voice-v2-self-echo.test.js` | 22 | The reproduced Android loudspeaker feedback loop |
 | **Total** | **61** | |
+
+### Current state on `main`
+
+`origin/main` @ `149d94e` carries **74 tests, all passing** — the 61 above plus
+13 in a new `voice-v2-turn-taking.test.js`. Verified read-only; the file itself
+is not documented here because the work it covers is unfinished
+([02 · Voice v2](../02-development/voice-v2.md#current-state--active-development-do-not-treat-as-settled)).
 
 ## How it works
 
@@ -61,9 +76,13 @@ Two design choices matter:
 | The coalesce window stays labelled provisional | "the coalesce window is declared provisional and not an end-of-turn timer" |
 
 That last one is unusual and worth noting: it is a test on a *comment*. It
-exists so that nobody can quietly repurpose `FINAL_COALESCE_MS` into the
-end-of-turn timer the design removed — the guard rail is asserted, not just
+existed so that nobody could quietly repurpose `FINAL_COALESCE_MS` into the
+end-of-turn timer the design removed — the guard rail was asserted, not just
 written. See [L8](../05-knowledge/lessons-learned.md#l8--label-provisional-code-in-the-code).
+
+(That constant was later removed outright rather than repurposed, so the test's
+subject is gone. Whether an equivalent guard rail now covers its replacement is
+not established here — the work is unfinished.)
 
 ## The gates held — self-echo
 
@@ -87,11 +106,15 @@ see [Test Results](test-results.md).
 
 ## What the suite does not prove
 
-The **long natural-pause** problem. `FINAL_COALESCE_MS` coalesces Android's
-rapid cumulative finals; it is not an end-of-turn timer and must not be raised to
-mask a long pause. End-of-turn comes from the recogniser's own endpointer, and
-that behaviour can only be judged on real hardware —
-[Physical Tests](physical-tests.md).
+**Anything that lives in real audio.** As of `149d94e` the suite's own README
+puts it as "they model an engine, not a room": pause tolerance, how promptly
+barge-in feels, and audible artefacts are properties of a real phone in a real
+room.
+
+This is not hypothetical. 74 offline tests pass on `main` while **two failures
+reproduce on Luis's Android phone** — a natural pause still submits early, and
+there are repeated audible clicks while listening. Neither has offline coverage.
+See [Physical Tests](physical-tests.md).
 
 ## Gap
 

@@ -1,7 +1,9 @@
 # Test Plans
 
 > **Status:** partial — voice has a real plan; nothing else in the system does.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** PLANNING
+> **Basis:** `ed568e6`
+> **Last reviewed:** 2026-09-10
 
 ## Voice v2 — the plan as executed
 

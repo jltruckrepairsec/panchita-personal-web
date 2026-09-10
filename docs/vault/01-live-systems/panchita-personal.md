@@ -3,7 +3,9 @@
 > **Status:** sourced — this is the production front end and it lives in this
 > repository.
 > **Source:** `index.html` @ `ed568e6` (last functional change `b01eb18`)
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CURRENT PRODUCTION
+> **Basis:** `b01eb18` — `index.html` is byte-identical on `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ## What it is
 

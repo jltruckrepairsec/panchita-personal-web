@@ -1,12 +1,16 @@
 # 04 — Security
 
+> **Status:** section index.
+> **Lifecycle:** VAULT INDEX
+> **Last reviewed:** 2026-09-10
+
 | Page | Status |
 | --- | --- |
 | [Guardian](guardian.md) | Stub |
 | [Authentication](authentication.md) | Sourced — client side fully documented |
 | [Permissions](permissions.md) | Stub |
 | [Audit](audit.md) | Stub |
-| [Incident History](incident-history.md) | Sourced — one incident, fully reconstructed |
+| [Incident History](incident-history.md) | Sourced — 1 incident closed; 2 hardware failures open elsewhere |
 
 ## Posture in one paragraph
 

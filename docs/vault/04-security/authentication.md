@@ -3,7 +3,9 @@
 > **Status:** sourced for the client side. Server-side verification is not in
 > this repository.
 > **Source:** `index.html` @ `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CURRENT PRODUCTION
+> **Basis:** `b01eb18` — `index.html` unchanged on `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ## Factors
 

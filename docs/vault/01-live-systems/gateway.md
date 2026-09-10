@@ -4,7 +4,9 @@
 > browser observably sends and expects; the Gateway's internals are not in this
 > repository.
 > **Source:** `index.html` @ `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CURRENT PRODUCTION — client-observed contract only
+> **Basis:** `b01eb18` (`index.html` unchanged since)
+> **Last reviewed:** 2026-09-10
 
 ## What it is
 
@@ -12,7 +14,7 @@ One hosted n8n webhook. It is the entire back end as far as the browser is
 concerned: authentication, session issuance, rate limiting, module routing and
 the answer itself all come out of the same URL.
 
-The URL is declared at `index.html:161` and `voice-v2.html:266`. It is
+The URL is declared at `index.html:161` and `voice-v2.html:266` @`ed568e6`. It is
 deliberately not repeated here.
 
 ## The single most important property

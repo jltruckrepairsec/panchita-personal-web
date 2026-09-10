@@ -2,7 +2,8 @@
 
 > **Status:** stub — no source in this repository. One external skill covers a
 > slice of it.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What exists today
 
@@ -26,4 +27,13 @@ So marketing exists as one narrow capability for one business, not as a module.
 
 * Should the shop skill generalise into a module, or stay a shop-specific
   skill? Generalising a working narrow tool is often the wrong move.
-* Does anything publish automatically today?
+* Does anything publish automatically today? If so it is an action taken on the
+  owner's behalf, which belongs under
+  [04 · Guardian](../04-security/guardian.md).
+* Do the approved post templates belong in
+  [05 · Approved Prompts](../05-knowledge/approved-prompts.md)? They are
+  customer-facing text, which is the category that should be frozen rather than
+  regenerated.
+
+Blocked with the rest of this section on the module contract —
+[03 · README](README.md) and [09 · Blocked](../09-backlog/blocked.md).

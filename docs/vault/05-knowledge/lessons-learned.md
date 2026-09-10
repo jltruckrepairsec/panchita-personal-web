@@ -1,7 +1,9 @@
 # Lessons Learned
 
 > **Status:** sourced — each lesson has a specific event behind it.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** HISTORICAL RECORD
+> **Basis:** `ed568e6`
+> **Last reviewed:** 2026-09-10
 
 A lesson belongs here when it would change how the next piece of work is done.
 Lessons general enough to be binding get promoted into the
@@ -71,10 +73,16 @@ Do not count a limit that exists for another purpose as protection. See
 
 **From:** the whole Voice v2 sequence
 
-Continuous recognition, cumulative-final flooding and the self-echo loop all
-happened in `voice-v2.html`, on a branch, never served. Production kept working
-throughout. The cost of INC-001 was a debugging session; had it shipped in
-`index.html`, it would have been an outage in the owner's only interface.
+Every Voice v2 failure — cumulative-final flooding, the self-echo loop, and the
+two open hardware failures — happened in `voice-v2.html`. Production kept
+working throughout. The cost of INC-001 was a debugging session; had it shipped
+in `index.html`, it would have been an outage in the owner's only interface.
+
+**The precise mechanism matters, and it is not the one first recorded here.**
+This lesson originally credited the unmerged branch. The branch was later merged
+and the prototype is now public — and production was *still* untouched, because
+the isolation that counts is the **separate file**. A branch is a workflow
+convention; a different file is a structural guarantee.
 
 **Promoted:** [C1](../00-master-blueprint/constitution.md#c1--production-is-never-the-experiment)
 

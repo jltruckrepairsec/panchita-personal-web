@@ -1,5 +1,9 @@
 # 00 — Master Blueprint
 
+> **Status:** section index.
+> **Lifecycle:** VAULT INDEX
+> **Last reviewed:** 2026-09-10
+
 The intent behind the system. Everything in sections 01–09 should be traceable
 back to something written here; when it is not, either the work is off-plan or
 the blueprint is out of date.

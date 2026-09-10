@@ -3,24 +3,25 @@
 > **Status:** partial — the near term is sourced from open work in the
 > repository; anything beyond it is a stub.
 > **Source commit:** `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** PLANNING
+> **Basis:** `149d94e`
+> **Last reviewed:** 2026-09-10
 
 Sequenced work lives in [09 — Backlog](../09-backlog/). This page is the shape
 of the journey, not the queue.
 
-## Now — close out Voice v2
+## Now — Voice v2 is failing on hardware *(owned elsewhere)*
 
-Voice v2 is code-complete against every failure reproduced so far and has a
-green offline suite. One thing stands between it and production, and it cannot
-be settled at a desk:
+`voice-v2.html` is already deployed from `main` for phone testing, so nothing
+waits on a merge. What waits is the behaviour: two failures reproduce on Luis's
+Android phone while the offline suite passes.
 
-> "They do not prove the **long natural-pause** problem is solved … That
-> behaviour can only be judged on real Android hardware." — `tests/README.md`
+Findings and status:
+[06 · Physical Tests](../06-testing/physical-tests.md). Another session is
+diagnosing them; this vault records outcomes and does not propose fixes.
 
-Exit criteria: a hardware session on Luis's Android phone where a long natural
-pause mid-sentence does not end the turn, and no self-echo turn appears.
-
-Then: merge to `main`, and `index.html` inherits continuous voice.
+Until they close, `index.html` keeps its push-to-talk voice path unchanged and
+no architecture decision is recorded for continuous voice.
 
 ## Next — the Gateway contract, written down
 

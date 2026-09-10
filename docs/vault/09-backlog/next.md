@@ -1,24 +1,30 @@
 # Next
 
-> **Last reviewed:** 2026-09-09
+> **Status:** sourced — derived from open work in the repository.
+> **Lifecycle:** PLANNING
+> **Basis:** `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ---
 
-## X1 — Merge Voice v2 to `main`
+## X1 — Decide the end state for the deployed prototype
 
-**Depends on:** [N1](now.md#n1--run-the-voice-v2-hardware-test)
+**Depends on:** [N1](now.md#n1--resolve-the-two-open-hardware-failures-owned-elsewhere)
 
-Production inherits continuous voice. Decide before merging:
+Voice v2 is already on `main` and public; there is no merge pending. The open
+question is what happens *after* the two hardware failures close:
 
-* Does Voice v2 replace `index.html`'s voice path outright, or ship behind a
-  toggle for one cycle?
-* Does the test suite re-point at `index.html`? **If it does not, the tests stop
-  guarding production the moment they land** — they name `voice-v2.html` by path
-  (`tests/harness.js:17`).
-* Does `voice-v2.html` survive the merge, or get deleted?
+* Does `index.html` eventually inherit the continuous voice path, or does
+  `voice-v2.html` remain a permanent second page?
+* If production ever inherits it, does the suite re-point at `index.html`?
+  **If not, the tests stop guarding production the moment the behaviour moves**
+  — they name `voice-v2.html` by path (`tests/harness.js:17`).
+* Does the deployed prototype stay reachable indefinitely? It is public with two
+  known failures, which is fine for testing and worth an explicit decision
+  rather than drift.
 
-The second question is the one that matters. 61 tests aimed at a file nobody
-serves are 61 tests that guard nothing.
+The second question is the one that matters: tests aimed at a page that is not
+production guard the prototype, not the owner's experience.
 
 ---
 
@@ -42,8 +48,9 @@ Cheapest de-risking currently available.
 
 **From:** [06 · Test Plans](../06-testing/test-plans.md#indexhtml--no-plan-exists)
 
-The page that serves the owner has no tests; the prototype has 61. The harness
-that would run them already exists and is generic over a page path.
+The page that serves the owner has no tests; the prototype has 74
+([06 · Regression Tests](../06-testing/regression-tests.md)). The harness that
+would run them already exists and is generic over a page path.
 
 Priority order: the login handshake payload, the five `status` branches in
 `sendMessage`, password clearing on both paths, session-token rolling, and the

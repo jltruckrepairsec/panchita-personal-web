@@ -1,5 +1,9 @@
 # 09 — Backlog
 
+> **Status:** section index.
+> **Lifecycle:** PLANNING
+> **Last reviewed:** 2026-09-10
+
 | Page | Holds |
 | --- | --- |
 | [Now](now.md) | In flight, or next to be picked up |

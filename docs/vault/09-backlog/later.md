@@ -1,7 +1,8 @@
 # Later
 
-> Wanted, but not scheduled and not committed to.
-> **Last reviewed:** 2026-09-09
+> **Status:** partial — wanted, unscheduled, not committed to.
+> **Lifecycle:** PLANNING
+> **Last reviewed:** 2026-09-10
 
 ---
 
@@ -58,12 +59,31 @@ it keeps holding it. See [05 · SOPs](../05-knowledge/sops.md).
 
 `PAID_REALTIME_ENABLED` has been `false` since it was written and the paid path
 has never been costed. It is the number that would settle whether the
-engineering invested in the free path was the right trade.
+engineering invested in the free path was the right trade — and the question has
+sharpened: the free path's end-of-turn behaviour has now failed hardware testing
+twice, against two different mechanisms
+([06 · Physical Tests](../06-testing/physical-tests.md)).
 
 ## L-9 — iOS and desktop browser support
 
 Entirely untested. Unknown whether any of the Android findings in
 [05 · Research](../05-knowledge/research.md) transfer.
+
+## L-9b — Owner decisions the vault is holding
+
+Not work items — questions the vault cannot answer for itself, parked here so
+they are not lost:
+
+* **Three name collisions** between blueprint modules and existing vault
+  sections: *Legacy* (vs. [07 · Deprecated](../07-change-history/deprecated.md)),
+  *Standards* (vs.
+  [08 · Quality Standards](../08-cost-and-quality/quality-standards.md)), and
+  *Vision* (vs. [00 · Vision](../00-master-blueprint/vision.md)). Nothing should
+  be filed under any of the three until they are settled.
+* **Taxonomy expansion.** 16 long-term blueprint concepts have no home, and
+  they do not all belong in [03 — Modules](../03-modules/README.md): business
+  domains, platform components, knowledge/simulation and governance/legacy are
+  four different families. Deliberately not expanded yet.
 
 ## L-10 — Define Builder
 

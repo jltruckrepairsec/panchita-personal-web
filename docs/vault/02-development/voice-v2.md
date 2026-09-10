@@ -1,9 +1,15 @@
 # Voice v2
 
-> **Status:** sourced — code-complete against every failure reproduced so far,
-> offline suite green, blocked on real-hardware validation.
+> **Status:** sourced for the `ed568e6` state recorded below. **The
+> implementation has since moved and is under active development** — see
+> *Current state* before relying on any detail on this page.
 > **Source:** `voice-v2.html`, `tests/` @ `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** DEPLOYED PROTOTYPE · ACTIVE DEVELOPMENT · HARDWARE VERIFICATION PENDING
+> **Basis:** `ed568e6` (last state this vault verified). `origin/main` is at `149d94e` and moving — see *Current state* below
+> **Last reviewed:** 2026-09-10
+
+> **Canonical page** for the Voice v2 record and its current lifecycle. Other
+> pages link here rather than describing its implementation.
 
 ## Goal
 
@@ -13,17 +19,31 @@ across turns so one tap starts a whole conversation.
 
 ## Why it is a separate page
 
-`voice-v2.html` is a self-contained prototype on an unmerged branch. GitHub
-Pages serves `main`, so this file is never served to anyone
-([C1](../00-master-blueprint/constitution.md#c1--production-is-never-the-experiment)).
-`index.html` was not modified by any of this work.
+`voice-v2.html` is a self-contained prototype kept in its own file so that
+`index.html` is never touched by voice experiments. That guarantee has held:
+`index.html` is byte-identical to `b01eb18` on `origin/main` today.
 
-The header of the file states it plainly:
+The header of the file states its intent plainly:
 
 > "PANCHITA VOICE v2 — FREE PROTOTYPE FOR PHONE TESTING. NOT PRODUCTION."
 
 The interface is the production interface. The only visual addition is a
 compact voice bar shown while a voice session is running.
+
+### It is now deployed, and that is deliberate
+
+`voice-v2.html` is on `main` and therefore publicly reachable through GitHub
+Pages, so that Luis can load it on a real Android phone. **Deployed is not
+production.** Its lifecycle is DEPLOYED PROTOTYPE · ACTIVE DEVELOPMENT ·
+HARDWARE VERIFICATION PENDING; the official production voice experience
+remains `index.html`
+([01 · Panchita Personal](../01-live-systems/panchita-personal.md)).
+
+Two stale statements survive inside the file's own header and should not be
+read as current: that it "lives only on an unmerged branch", and its
+description of `FINAL_COALESCE_MS`, a constant that no longer exists. The
+vault quotes the header where it is still accurate and flags it where it is
+not.
 
 ## What changed from production
 
@@ -56,16 +76,17 @@ times and could trip the rate limiter. They are now coalesced locally: interim
 hypotheses are dropped outright, and one finished turn produces exactly one
 submission.
 
-`FINAL_COALESCE_MS = 400` is the width of that burst **and nothing more**. The
-source says so in three separate places because it is the single most
-misreadable constant in the file:
+At `ed568e6`, `FINAL_COALESCE_MS = 400` was the width of that burst **and
+nothing more**. The source said so in three separate places because it was the
+single most misreadable constant in the file:
 
 > "It is provisional hardware-test scaffolding, it is not semantic end-of-turn,
 > and it is not a reinstatement of the removed fixed silence timer."
 
-Raising it to paper over a long pause would silently rebuild the timer that
+Raising it to paper over a long pause would have silently rebuilt the timer that
 change 2 deleted. See
 [C5](../00-master-blueprint/constitution.md#c5--scaffolding-is-labelled-as-scaffolding).
+The constant has since been removed rather than raised — *Current state* below.
 
 ### Stale recogniser callbacks (fix 6)
 
@@ -80,25 +101,21 @@ the open microphone, Panchita's answer was recognised as user speech, fragments
 of it ("Claro", "Aquí", "dime") became user bubbles, she answered herself, and
 the loop ran until the Gateway message limit.
 
-**Root cause.** Submission was allowed at all times, and the only thing between
-her loudspeaker and a Gateway turn was a *text similarity* test that ignored
-any transcript shorter than six characters. Short fragments of her own speech
-walked straight through.
+**Fix.** Submission is gated on **lifecycle, not text**: from `speak()` until
+`speechSynthesis` reports silence plus a tail, nothing the microphone hears may
+reach the turn assembler or the Gateway, regardless of what it says.
 
-**Fix.** Submission is gated on **lifecycle, not text**. From the moment
-`speak()` is called until `speechSynthesis` reports silence and a tail has
-elapsed, nothing the microphone hears may reach the turn assembler or the
-Gateway — regardless of what it says. A garbled transcription of her audio is
-contained as reliably as an exact one. When the gate opens the recogniser is
-replaced, so audio captured during the gate is discarded with it.
-
-This is the origin of
+Root cause, the leaked fragments, the length-exemption defect and the proof are
+recorded once, in the canonical account —
+**[04 · INC-001](../04-security/incident-history.md#inc-001--android-loudspeaker-self-echo-loop)**.
+The rule it produced is
 [C6](../00-master-blueprint/constitution.md#c6--safety-is-enforced-on-lifecycle-not-on-content).
-Full write-up: [04 · Incident History](../04-security/incident-history.md).
 
-## Tuning constants
+## Tuning constants — as recorded at `ed568e6`
 
-All in `voice-v2.html`, lines 266–318.
+All in `voice-v2.html` @ `ed568e6`, lines 266–318. **This table is a historical
+record, not the current configuration.** `FINAL_COALESCE_MS` has since been
+removed outright and `TURN_BREAKER_MAX` changed; see *Current state*.
 
 | Constant | Value | Purpose |
 | --- | --- | --- |
@@ -137,26 +154,54 @@ private state, so the tests do not depend on internals that are free to change.
 
 Details: [06 · Regression Tests](../06-testing/regression-tests.md).
 
-## What is left
+## Current state — active development, do not treat as settled
 
-One thing, and it cannot be settled offline:
+`origin/main` is at `149d94e` ("Voice v2: real turn-taking, and mute as a user
+decision only"), one commit past this page's basis. That work is **not
+finished**, so this vault records only what can be stated without endorsing an
+in-flight design:
 
-> "They do not prove the **long natural-pause** problem is solved …
-> End-of-turn still comes from the recogniser's own endpointer. That behaviour
-> can only be judged on real Android hardware." — `tests/README.md`
+* `FINAL_COALESCE_MS` no longer exists. A turn-silence grace period replaced it
+  after real-phone testing showed the 400 ms window cut Luis off mid-sentence.
+  **The replacement value is not validated** — the suite on `main` says so
+  itself, calling it "a starting point to tune from, not a verified value".
+* A barge-in quarantine and an explicit mute/`SILENCIADO` state were added.
+  Neither is documented here yet.
+* The offline suite grew from 61 tests to 74. See
+  [06 · Regression Tests](../06-testing/regression-tests.md).
 
-Removing the fixed silence timer means the recogniser decides when a turn ends.
-Whether it waits out a real thinking pause mid-sentence is a property of
-Android's endpointer, not of this code.
+**No architecture decision has been recorded for any of it.** [ADR-005](../07-change-history/architecture-decisions.md#adr-005--end-of-turn-belongs-to-the-recogniser-not-to-a-timer) is marked
+*under review* rather than superseded, because the design that would replace it
+is still being diagnosed —
+[07 · ADR-005](../07-change-history/architecture-decisions.md#adr-005--end-of-turn-belongs-to-the-recogniser-not-to-a-timer).
 
-Exit criteria and the test protocol:
+Another session owns this work. Nothing on this page should be edited to
+describe it as complete until that session reports.
+
+## What is left — two unresolved hardware failures
+
+A real Android physical test confirmed two failures that remain open. Reported
+by the owner on **2026-09-10**; the test itself was run against the deployed
+prototype at or after `149d94e`:
+
+1. **A natural conversational pause still causes premature submission.** The
+   problem the fixed-timer removal was meant to solve is not solved.
+2. **Repeated audible clicks while Voice v2 is listening**, occurring even when
+   both Luis and Panchita are silent. This is a new symptom with no entry in
+   [05 · Research](../05-knowledge/research.md) and no offline coverage.
+
+Both are being diagnosed in another session. Protocol and status:
 [06 · Physical Tests](../06-testing/physical-tests.md).
 
 ## Open questions
 
-* Does Voice v2 replace `index.html`'s voice path outright on merge, or ship
-  behind a toggle for one test cycle?
-* Once merged, does `voice-v2.html` stay as a test harness target or get
-  deleted? The test suite points at it by path.
+* `voice-v2.html` is deployed for phone testing. What is the end state — does
+  its behaviour eventually land in `index.html`, or does it stay a separate
+  page permanently?
+* The test suite points at `voice-v2.html` by path
+  (`tests/harness.js:17`). If production ever inherits this voice path, the
+  suite has to be re-pointed or it guards nothing.
+* `PAID_REALTIME_ENABLED` is dead code while `false` — is paid realtime a real
+  plan or a placeholder?
 * `PAID_REALTIME_ENABLED` is dead code while `false` — is paid realtime a real
   plan or a placeholder?

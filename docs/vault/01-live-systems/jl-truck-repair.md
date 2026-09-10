@@ -2,7 +2,8 @@
 
 > **Status:** stub — the business is real and operational; its Panchita-facing
 > system is not in this repository.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What is known
 

@@ -2,7 +2,8 @@
 
 > **Status:** partial — what is free is known precisely; what is paid is
 > entirely unknown.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** MIXED — free tier known, paid tier unknown
+> **Last reviewed:** 2026-09-10
 
 ## Free, and known to be free
 

@@ -1,25 +1,35 @@
 # Blocked
 
-> Items that cannot proceed, each with the reason named and what would unblock
-> it.
-> **Last reviewed:** 2026-09-09
+> **Status:** sourced — each blocker names its cause.
+> **Lifecycle:** PLANNING
+> **Basis:** `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ---
 
-## B1 — Voice v2 merge
+## B1 — Voice v2 treated as a settled voice path
 
-**Blocked by:** no hardware test result.
+**Blocked by:** two unresolved hardware failures.
 
-Code-complete, 61/61 offline tests green, and stuck. The offline suite states
-its own limit: end-of-turn now comes from Android's endpointer, and whether that
-endpointer tolerates a long natural pause "can only be judged on real Android
-hardware".
+Not blocked on a merge — `voice-v2.html` is already on `main` and deployed for
+phone testing, deliberately. What is blocked is calling the voice path finished,
+recording an architecture decision for it, or letting it near `index.html`.
 
-**Unblocked by:** [N1](now.md#n1--run-the-voice-v2-hardware-test) — one session
-on Luis's phone.
+74 offline tests pass on `main` and two failures reproduce on Luis's phone:
 
-**Note:** this is blocked on an *action*, not on a decision or a dependency. It
-is the cheapest blocker in the vault to clear.
+| # | Finding | Status |
+| --- | --- | --- |
+| H-1 | A natural conversational pause still causes premature submission | OPEN |
+| H-2 | Repeated audible clicks while listening, both parties silent | OPEN |
+
+Both are under diagnosis in another session. Detail:
+[06 · Physical Tests](../06-testing/physical-tests.md).
+
+**Consequences held open by this:** [ADR-005](../07-change-history/architecture-decisions.md#adr-005--end-of-turn-belongs-to-the-recogniser-not-to-a-timer) stays *under review*, D1 stays
+*under review*, and no ADR-007 is written.
+
+**Unblocked by:** that session reporting. Not by anything in this vault, and not
+by tuning a constant — PT-1 has now failed against two different mechanisms.
 
 ---
 

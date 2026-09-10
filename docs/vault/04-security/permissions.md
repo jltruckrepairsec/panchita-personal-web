@@ -1,7 +1,8 @@
 # Permissions
 
 > **Status:** stub — there is no permissions model. The system has one user.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What is true today
 

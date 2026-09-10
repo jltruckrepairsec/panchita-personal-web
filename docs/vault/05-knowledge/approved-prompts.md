@@ -1,7 +1,8 @@
 # Approved Prompts
 
 > **Status:** stub — no prompt is recorded in this repository.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What is true today
 

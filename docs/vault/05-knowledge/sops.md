@@ -2,7 +2,9 @@
 
 > **Status:** stub — no standard operating procedure is written down in this
 > repository.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Basis:** `ed568e6`
+> **Last reviewed:** 2026-09-10
 
 ## The one procedure that is effectively documented
 

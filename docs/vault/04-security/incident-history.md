@@ -2,7 +2,13 @@
 
 > **Status:** sourced — one incident, reconstructed in full from the source and
 > the tests written to close it.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** HISTORICAL RECORD
+> **Basis:** `ed568e6`
+> **Last reviewed:** 2026-09-10
+
+> **Canonical page** for the self-echo incident: root cause, the leaked
+> fragments, the length-exemption defect, the fix and the proof. Other pages
+> link here rather than restating it.
 
 ---
 
@@ -12,7 +18,7 @@
 | --- | --- |
 | **Date found** | 2026-09-09 |
 | **Found by** | Luis, on his own Android phone |
-| **Affected** | `voice-v2.html` prototype only — production `index.html` never had continuous recognition and was never exposed |
+| **Affected** | `voice-v2.html` only. Production `index.html` never had continuous recognition and was never altered — it is byte-identical to `b01eb18` today. Note that `voice-v2.html` **is** publicly reachable from `main`, deliberately, so "prototype" here means not-production, not un-deployed |
 | **Severity** | High for the prototype: unbounded self-driven Gateway traffic |
 | **Closed by** | `ed568e6` "Voice v2: contain the Android loudspeaker self-echo loop" |
 | **Status** | Fixed, reproduced in tests, contained by construction |
@@ -70,7 +76,7 @@ because the gate never looks at the transcript.
 When the gate opens, the recogniser is **replaced**, so audio captured while
 the gate was held is discarded with it and cannot arrive late.
 
-Supporting constants (`voice-v2.html:300`):
+Supporting constants (`voice-v2.html:300` @`ed568e6`):
 
 | Constant | Value | Role |
 | --- | --- | --- |
@@ -122,10 +128,12 @@ Gates now held (all in `tests/voice-v2-self-echo.test.js`):
    [C7](../00-master-blueprint/constitution.md#c7--a-gate-must-never-be-able-to-wedge-shut).
 4. **A rate limiter is not a safety mechanism.** It stopped this loop, but it
    was never designed to, and the next loop may sit under its threshold.
-5. **The prototype was isolated, so this cost nothing.** Continuous recognition
-   never touched production. This is the clearest return
-   [C1](../00-master-blueprint/constitution.md#c1--production-is-never-the-experiment)
-   has paid so far.
+5. **The prototype was isolated by *file*, so this cost nothing.** Continuous
+   recognition never touched `index.html`. Worth being precise about why: the
+   protection was a separate file, not an unmerged branch — the branch was
+   later merged and the prototype is now public, and production was still
+   unaffected. See
+   [C1](../00-master-blueprint/constitution.md#c1--production-is-never-the-experiment).
 
 Also in [05 · Lessons Learned](../05-knowledge/lessons-learned.md).
 

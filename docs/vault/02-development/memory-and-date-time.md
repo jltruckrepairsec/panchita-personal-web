@@ -1,7 +1,8 @@
 # Memory + Date-Time
 
 > **Status:** stub — no source in this repository.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What is known from here
 
@@ -32,7 +33,16 @@ That last point is the likely reason this page exists as a work item.
 
 * Should the browser start sending its timezone and local time on each turn?
   It is a one-line change with a real correctness payoff, but it is a contract
-  change to the Gateway.
+  change — so it waits on
+  [01 · Gateway](../01-live-systems/gateway.md) being written up, tracked as
+  [X2](../09-backlog/next.md#x2--write-the-gateway-contract).
 * Is memory per-session, per-day, or permanent?
 * Does memory cross module boundaries — does the truck-repair conversation know
-  what the real-estate one said?
+  what the real-estate one said? That is a question about the module contract,
+  which blocks all of [03 — Modules](../03-modules/README.md).
+
+## Not being worked on here
+
+This page is a record, not a design. The Memory + Time candidate is an owner
+decision item and nothing in this vault should propose an implementation for it
+— see [09 · Later](../09-backlog/later.md).

@@ -1,5 +1,9 @@
 # 08 — Cost & Quality
 
+> **Status:** section index.
+> **Lifecycle:** VAULT INDEX
+> **Last reviewed:** 2026-09-10
+
 | Page | Status |
 | --- | --- |
 | [Cost Constitution](cost-constitution.md) | Partial — one rule, enforced in code |

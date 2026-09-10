@@ -1,7 +1,9 @@
 # Rollbacks
 
 > **Status:** sourced — none have occurred.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** HISTORICAL RECORD
+> **Basis:** `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 ## Record
 
@@ -13,13 +15,22 @@ That is a real fact about the project, not an empty page.
 
 ## Why there has been nothing to roll back
 
-The two serious failures so far — cumulative-final flooding and the self-echo
-loop — both happened in `voice-v2.html`, on a branch that GitHub Pages never
-serves. Neither reached production, so neither needed withdrawing. They were
-fixed forward on the branch.
+Every failure so far — cumulative-final flooding, the self-echo loop, and the two
+open hardware failures — has happened in `voice-v2.html`. None reached
+`index.html`, which is byte-identical to `b01eb18`, so nothing has ever needed
+withdrawing from production. All were fixed forward.
 
-This is the payoff of ADR-004 measured directly: two production incidents
-avoided, zero rollbacks required.
+The protection was **file isolation**, not branch isolation:
+`voice-v2.html` has been on `main` and publicly reachable since `070bda9`, and
+production was unaffected anyway. See
+[ADR-004](architecture-decisions.md#adr-004--risky-work-ships-as-a-separate-page-on-a-branch)
+and [C1](../00-master-blueprint/constitution.md#c1--production-is-never-the-experiment).
+
+**A caveat this page owes the reader:** a deployed prototype with two open
+hardware failures is reachable by anyone with the URL. That is a deliberate
+testing decision, not an incident, and it is not a rollback candidate. But it
+means "nothing has needed rolling back" is a statement about `index.html`, not
+about everything `main` serves.
 
 ## How a rollback would work today
 

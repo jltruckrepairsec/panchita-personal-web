@@ -1,7 +1,8 @@
 # Financial
 
 > **Status:** stub — no source in this repository, no external skill either.
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** CONCEPT ONLY
+> **Last reviewed:** 2026-09-10
 
 ## What belongs here
 

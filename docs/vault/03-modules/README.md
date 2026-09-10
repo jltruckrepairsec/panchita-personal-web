@@ -1,5 +1,9 @@
 # 03 — Modules
 
+> **Status:** section index.
+> **Lifecycle:** VAULT INDEX
+> **Last reviewed:** 2026-09-10
+
 Business capability areas Panchita covers. A module is a *what she can do*;
 [01 — Live Systems](../01-live-systems/) is a *where it runs*.
 

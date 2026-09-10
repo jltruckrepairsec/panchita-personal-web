@@ -3,21 +3,43 @@
 > **Status:** partial — every rule below is one the shipped code already obeys,
 > with its evidence. Rules that exist only in Luis's head are not here yet.
 > **Source commit:** `ed568e6`
-> **Last reviewed:** 2026-09-09
+> **Lifecycle:** GOVERNING
+> **Basis:** `ed568e6`; C1 re-verified against `origin/main` @ `149d94e`
+> **Last reviewed:** 2026-09-10
 
 A rule earns a place here when breaking it would be a defect, not a preference.
 
 ## C1 — Production is never the experiment
 
-Risky work ships as a separate artefact on an unmerged branch. Voice v2 lives
-in `voice-v2.html`; `index.html` was not touched by it.
+Risky work ships as a **separate artefact**, so production is never the thing
+being changed. Voice v2 lives in `voice-v2.html`; `index.html` was not touched
+by any of its four commits and is byte-identical to `b01eb18` on `origin/main`
+today.
+
+**Test of compliance:** the production artefact's bytes do not change when an
+experiment ships.
+
+### The rule survived, but its original justification did not
+
+The rule was first written citing file isolation *plus* branch isolation:
 
 > "Production remains index.html (commit b01eb18), untouched and unchanged.
 > GitHub Pages serves `main`; this file lives only on an unmerged branch."
-> — `voice-v2.html:11`
+> — `voice-v2.html:11` @`ed568e6`
 
-**Test of compliance:** `main` can be served at any moment without knowing what
-is on a branch.
+The second half is no longer true. `voice-v2.html` is on `main` and publicly
+reachable, deliberately, so it can be loaded on a real Android phone. Branch
+isolation was never the load-bearing part — **file isolation was**, and it held.
+
+The lesson is that "a branch is never served" was infrastructure luck, not a
+guarantee. What actually protects production is that the experiment lives in a
+different file. See
+[02 · Voice v2](../02-development/voice-v2.md#it-is-now-deployed-and-that-is-deliberate)
+and [07 · ADR-004](../07-change-history/architecture-decisions.md#adr-004--risky-work-ships-as-a-separate-page-on-a-branch).
+
+**Corollary, adopted with this revision:** deployed is not production. An
+artefact reachable by the public may still be a prototype, and the vault must
+say which via the `Lifecycle` field on every page.
 
 ## C2 — The confirmed interface is preserved
 
@@ -26,7 +48,7 @@ them.
 
 > "the confirmed Panchita Personal interface is PRESERVED … The only addition
 > is a compact voice bar … Nothing was redesigned or replaced."
-> — `voice-v2.html:14`
+> — `voice-v2.html:14` @`ed568e6`
 
 ## C3 — The secret leaves memory at the first opportunity
 
@@ -51,7 +73,7 @@ be mistaken for.
 
 > "FINAL_COALESCE_MS is the width of that burst ONLY. It is provisional
 > hardware-test scaffolding, it is not semantic end-of-turn, and it is not a
-> reinstatement of the removed fixed silence timer." — `voice-v2.html:36`
+> reinstatement of the removed fixed silence timer." — `voice-v2.html:36` @`ed568e6`
 
 ## C6 — Safety is enforced on lifecycle, not on content
 
@@ -60,7 +82,7 @@ whether the text looks like something she said. A content test can always be
 walked through by a garbled transcript; a lifecycle gate cannot.
 
 > "submission is now gated on LIFECYCLE, not on text … regardless of what it
-> says" — `voice-v2.html:55`
+> says" — `voice-v2.html:55` @`ed568e6`
 
 See [04 · Incident History](../04-security/incident-history.md) for what this
 rule cost to learn.
@@ -70,7 +92,7 @@ rule cost to learn.
 Every hold has an absolute ceiling and a test proving it releases.
 
 > `var TTS_GATE_MAX_MS = 90000; // absolute ceiling; the gate can never wedge`
-> — `voice-v2.html:303`, held by the test "the gate never wedges shut when TTS
+> — `voice-v2.html:303` @`ed568e6`, held by the test "the gate never wedges shut when TTS
 > never reports an end".
 
 ## C8 — The test runs the shipped code
@@ -89,7 +111,7 @@ re-implemented for testing.
 
 ## C10 — Paid capability is off until it is justified
 
-> `var PAID_REALTIME_ENABLED = false;` — `voice-v2.html:270`
+> `var PAID_REALTIME_ENABLED = false;` — `voice-v2.html:270` @`ed568e6`
 
 See [08 · Cost Constitution](../08-cost-and-quality/cost-constitution.md).
 
