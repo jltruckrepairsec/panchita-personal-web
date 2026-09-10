@@ -482,14 +482,20 @@
   var sessions = [];
   var sess = null;
 
-  function sessionOpen(r, via) {
+  // A row is created at every START ATTEMPT, not at onstart. A start that is
+  // rejected before onstart ever fires -- the not-allowed case -- therefore
+  // still appears in the ledger, with started=N and the reason it died. That
+  // is what makes "which instance, started by which call site" answerable
+  // from the phone without inference.
+  function sessionAttempt(r, via) {
     sess = {
       id: r ? r.__id : "?", n: sessions.length + 1, via: via || "?",
-      at: Date.now(), audio: false, speech: 0, interim: 0, final: 0,
-      staleRes: 0, ended: 0, why: ""
+      at: Date.now(), started: false, audio: false, speech: 0, interim: 0,
+      final: 0, staleRes: 0, ended: 0, why: ""
     };
     sessions.push(sess);
     if (sessions.length > SESSION_LOG) sessions = sessions.slice(-SESSION_LOG);
+    return sess;
   }
 
   function sessionMark(field, n) {
@@ -512,7 +518,8 @@
       var x = sessions[i];
       var dur = (x.ended ? x.ended - x.at : Date.now() - x.at) / 1000;
       out.push("  s" + x.n + " #" + x.id + " " + dur.toFixed(1) + "s " +
-               "audio=" + (x.audio ? "Y" : "N") +
+               "started=" + (x.started ? "Y" : "N") +
+               " audio=" + (x.audio ? "Y" : "N") +
                " spch=" + x.speech +
                " int=" + x.interim +
                " fin=" + x.final +
@@ -873,6 +880,14 @@
     thawTimer: null,
     startedAt: 0,
     restartVia: "",
+    // Has this voice session ever demonstrated working audio? Set the first
+    // time the device delivers an audio route, and again on the first
+    // processed FINAL. A not-allowed AFTER either of these cannot honestly be
+    // reported as "the microphone permission was revoked".
+    audioEverFlowed: false,
+    finalsEver: false,
+    notAllowedRetries: 0,
+    needsGesture: false,   // waiting for Luis to tap; NOT muted, NOT off
     quarantineConfirmed: false,   // proven human: heard after her speaker died
     speakerStoppedAt: 0,
     prefixTimer: null,
@@ -900,7 +915,7 @@
              stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0,
              carried: 0, prefixDropped: 0, onsets: 0,
              built: 0, started: 0, ended: 0, noSpeech: 0, aborted: 0, micAcquired: 0,
-             lostResults: 0, staleBy: {} }
+             lostResults: 0, staleBy: {}, notAllowedAfterAudio: 0, gestureWaits: 0 }
   };
 
   var STR = {
@@ -917,6 +932,8 @@
       sListening: "ESCUCHANDO", sThinking: "PENSANDO", sSpeaking: "PANCHITA HABLA", sMuted: "SILENCIADO",
       bMute: "Silenciar", bUnmute: "Reactivar", bEnd: "Terminar voz",
       loopGuard: "Se detuvo la voz: el micrófono estaba captando la voz de Panchita. Toca el micrófono para volver a empezar, de preferencia con audífonos.",
+      sPaused: "EN PAUSA",
+      tapToResume: "Toca el micrófono para continuar.",
       hintVoiceOn: "Voz activa. Habla normal; puedes pausar para pensar.",
       hintVoiceOff: "Toca el micrófono para conversar por voz.",
       hintMuted: "Micrófono silenciado. Toca Reactivar para seguir.",
@@ -945,6 +962,8 @@
       sListening: "LISTENING", sThinking: "THINKING", sSpeaking: "PANCHITA SPEAKING", sMuted: "MUTED",
       bMute: "Mute", bUnmute: "Unmute", bEnd: "End voice",
       loopGuard: "Voice stopped: the microphone was picking up Panchita's own voice. Tap the microphone to start again, preferably with headphones.",
+      sPaused: "PAUSED",
+      tapToResume: "Tap the microphone to continue.",
       hintVoiceOn: "Voice on. Speak normally; you can pause to think.",
       hintVoiceOff: "Tap the microphone to talk with voice.",
       hintMuted: "Microphone muted. Tap Unmute to continue.",
@@ -1025,7 +1044,7 @@
 
   function renderVoice() {
     d["voice-bar"].classList.toggle("visible", v.active);
-    d["mic-btn"].classList.toggle("listening", v.active && !v.muted);
+    d["mic-btn"].classList.toggle("listening", v.active && !v.muted && !v.needsGesture);
     var map = {
       listening: ["sListening", "listening"], thinking: ["sThinking", "thinking"],
       speaking: ["sSpeaking", "speaking"], off: ["sListening", ""]
@@ -1033,13 +1052,17 @@
     // SILENCIADO is a USER state, not an assistant state. It is shown only
     // when Luis muted the microphone himself, never because Panchita happens
     // to be speaking.
-    var m = v.muted ? ["sMuted", "muted"] : (map[v.phase] || map.off);
+    // Three distinct user-facing states, in priority order: Luis muted it,
+    // Android is waiting for a tap, or the assistant's own activity.
+    var m = v.muted ? ["sMuted", "muted"]
+          : (v.needsGesture ? ["sPaused", "muted"] : (map[v.phase] || map.off));
     d["v-state"].textContent = t(m[0]);
     d["v-state"].className = "v-state" + (m[1] ? " " + m[1] : "");
     d["v-mute"].textContent = v.muted ? t("bUnmute") : t("bMute");
     d["v-mute"].classList.toggle("on", v.muted);
     if (!v.active) d["chat-hint"].textContent = t("hintVoiceOff");
     else if (v.muted) d["chat-hint"].textContent = t("hintMuted");
+    else if (v.needsGesture) d["chat-hint"].textContent = t("tapToResume");
     else d["chat-hint"].textContent = t("hintVoiceOn");
     renderDiag();
   }
@@ -1052,6 +1075,7 @@
   function voiceState() {
     if (!v.active) return "OFF";
     if (v.muted) return "MANUALLY_MUTED";
+    if (v.needsGesture) return "AWAITING_USER_GESTURE";
     if (v.phase === "speaking") return "ASSISTANT_SPEAKING";
     if (v.userSpeaking) return "USER_SPEAKING";
     if (v.assembler.hasPending()) return "USER_PAUSED";
@@ -1126,6 +1150,11 @@
       "restart rate: " + restartRate() + "/min",
       "mic acquisitions: " + v.stats.micAcquired,
       "hold mic stream: " + HOLD_MIC_STREAM + "  (false = 149d94e path)",
+      "audio ever flowed: " + v.audioEverFlowed,
+      "finals ever: " + v.finalsEver,
+      "not-allowed after audio: " + v.stats.notAllowedAfterAudio,
+      "not-allowed retries: " + v.notAllowedRetries,
+      "awaiting gesture: " + v.needsGesture + "   (waits: " + v.stats.gestureWaits + ")",
       "restart delay: " + RESTART_DELAY_MS + "ms",
       "-- stale callbacks, by handler --",
       "TRANSCRIPTS LOST (stale onresult): " + v.stats.lostResults,
@@ -1355,6 +1384,56 @@
     v.quarantineAt = now || Date.now();
   }
 
+  // Acquire the microphone, settle what to do with the temporary stream, and
+  // ONLY THEN hand control back. startVoice() always did this correctly by
+  // starting inside probe.then(); page.visible and unmute did not -- they
+  // fired getUserMedia and started the recogniser synchronously, so with
+  // HOLD_MIC_STREAM=false the probe's own getTracks().stop() landed AFTER the
+  // recogniser was already running and tore the capture route out from under
+  // it. Every path now goes through here, so the ordering cannot diverge
+  // again: probe completes, temporary stream is released, then start.
+  function acquireMicThen(onReady, onDenied) {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      traceEvent("mic.probe", "unavailable; starting anyway");
+      onReady();
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      releaseMicStream();
+      v.stats.micAcquired++;
+      if (HOLD_MIC_STREAM) {
+        v.micStream = stream;
+        traceEvent("mic.hold", "stream held for session");
+      } else {
+        // Released BEFORE the recogniser starts, never underneath it.
+        try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
+        traceEvent("mic.probe", "released before start");
+      }
+      onReady();
+    }, function () {
+      traceEvent("mic.probe", "denied");
+      if (onDenied) onDenied(); else onReady();
+    });
+  }
+
+  // Build a recogniser, log the attempt in the ledger, start it. Returns false
+  // if start() threw synchronously; an asynchronous rejection (not-allowed)
+  // arrives at onerror instead, and the ledger row is already there for it.
+  function startRecogniser(via) {
+    var r = buildRecognizer();
+    sessionAttempt(r, via);
+    v.restartVia = via;
+    v.rec = r;
+    traceEvent("rec.start.attempt", "#" + r.__id + " via=" + via);
+    try { r.start(); return true; }
+    catch (e) {
+      traceEvent("rec.start.throw", "#" + r.__id + " " + String(e && e.name || e));
+      sessionClose("throw");
+      v.rec = null;
+      return false;
+    }
+  }
+
   // Drop the held capture stream. Called wherever listening genuinely stops.
   function releaseMicStream() {
     if (!v.micStream) return;
@@ -1410,7 +1489,11 @@
     // exactly that case, and taken otherwise (a pure self-echo storm, where
     // dropping whatever the recogniser captured from her speaker is the point).
     var speaking = confirmed && carried;
-    var doReset = resetMic && !speaking && v.active && !v.muted && !v.stopping;
+    // needsGesture is included deliberately: while we are waiting for Luis to
+    // tap, NOTHING may reopen the recogniser behind his back. Without this the
+    // TTS gate quietly restarted it and the gesture gate was defeated.
+    var doReset = resetMic && !speaking && v.active && !v.muted && !v.stopping &&
+                  !v.needsGesture;
 
     if (doReset) {
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
@@ -1448,14 +1531,12 @@
       // Android Chrome can refuse a start() issued straight after abort().
       // One retry on the normal restart delay; voice only fails if that fails
       // too, because losing the session would be worse than the echo.
-      try { v.rec = buildRecognizer(); v.rec.start(); }
-      catch (e) {
-        v.rec = null;
+      if (!startRecogniser("gate.reset")) {
         v.restartTimer = setTimeout(function () {
           v.restartTimer = null;
-          if (!v.active || v.stopping || v.muted || v.rec) return;
-          try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
-          catch (e2) { failVoice(t("voiceFailed")); }
+          if (!v.active || v.stopping || v.muted || v.needsGesture || v.rec) return;
+          if (startRecogniser("gate.reset.retry")) v.stats.restarts++;
+          else failVoice(t("voiceFailed"));
           renderDiag();
         }, RESTART_DELAY_MS);
       }
@@ -1613,8 +1694,8 @@
     // that was frozen across the restart gap picks up where it left off.
     r.onstart = function () {
       if (v.rec !== r) { traceStale("onstart", r); return; }
-      sessionOpen(r, v.restartVia || "start");
-      v.restartVia = "";
+      if (sess && sess.id === r.__id) sess.started = true;
+      v.notAllowedRetries = 0;          // a clean start clears the retry budget
       v.stats.started++;
       v.listening = true;
       traceEvent("rec.start", "#" + r.__id);
@@ -1625,6 +1706,7 @@
     r.onaudiostart = function () {
       if (v.rec !== r) { traceStale("onaudiostart", r); return; }
       v.listening = true;
+      v.audioEverFlowed = true;         // this session HAS had working audio
       sessionMark("audio");
       traceEvent("audio.start", "#" + r.__id);
       if (v.assembler.release()) traceEvent("timer.resume", v.assembler.remainingMs() + "ms left");
@@ -1761,6 +1843,7 @@
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
 
         sessionMark("final");
+        v.finalsEver = true;            // and HAS produced recognised speech
         traceEvent("FINAL", snip(text));
         v.lastInterim = "";
         touchIdle();
@@ -1774,11 +1857,59 @@
     r.onerror = function (ev) {
       if (v.rec !== r) { traceStale("onerror", r); return; }
       var code = ev && ev.error;
-      traceEvent("rec.error", code);
+      // Everything needed to attribute this without inference: which instance,
+      // which call site started it, and what this voice session had already
+      // achieved before the error arrived.
+      traceEvent("rec.error", code + " #" + r.__id +
+        " via=" + (sess && sess.id === r.__id ? sess.via : (v.restartVia || "?")) +
+        " audioEver=" + (v.audioEverFlowed ? "Y" : "N") +
+        " finEver=" + (v.finalsEver ? "Y" : "N") +
+        " retry=" + v.notAllowedRetries);
       if (code === "no-speech") { v.stats.noSpeech++; return; }   // normal, and
       if (code === "aborted") { v.stats.aborted++; return; }      // very frequent
       v.stats.errors++;
-      if (code === "not-allowed" || code === "service-not-allowed") { failVoice(t("permissionDenied")); return; }
+
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        // A not-allowed that arrives BEFORE this session ever had audio is a
+        // genuine permission denial and is reported as one, unchanged.
+        if (!v.audioEverFlowed && !v.finalsEver) {
+          sessionClose("denied");
+          failVoice(t("permissionDenied"));
+          return;
+        }
+        // But the microphone demonstrably worked in this very session, so the
+        // permission was not revoked. The spec's not-allowed also covers the
+        // user agent refusing the operation -- typically a start() with no
+        // remaining user activation, which is exactly what a return from
+        // background produces. Claiming "permission denied" here is a lie that
+        // costs Luis the whole session.
+        v.stats.notAllowedAfterAudio++;
+        sessionClose("not-allowed");
+        if (v.rec) { try { v.rec.abort(); } catch (e2) {} }
+        v.rec = null;
+        if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
+
+        v.notAllowedRetries++;
+        if (v.notAllowedRetries === 1) {
+          // Exactly one automatic retry, on the normal restart delay.
+          traceEvent("not-allowed.retry", "auto attempt 1");
+          v.restartTimer = setTimeout(function () {
+            v.restartTimer = null;
+            if (!v.active || v.stopping || v.muted || v.needsGesture || v.rec) return;
+            acquireMicThen(function () {
+              if (!v.active || v.stopping || v.muted || v.needsGesture || v.rec) return;
+              if (!startRecogniser("not-allowed.retry")) requireGesture();
+            }, function () { requireGesture(); });
+          }, RESTART_DELAY_MS);
+          return;
+        }
+        // A second rejection: stop retrying automatically and wait for a tap.
+        // Voice is NOT ended and NOT muted -- the session, history and text
+        // chat all survive; only listening is paused.
+        traceEvent("not-allowed.gesture", "auto retry exhausted");
+        requireGesture();
+        return;
+      }
       if (code === "audio-capture") { failVoice(t("noMic")); return; }
       if (code === "network") { d["chat-hint"].textContent = t("network"); return; }
       renderDiag();
@@ -1816,15 +1947,19 @@
       v.restartTimer = setTimeout(function () {
         v.restartTimer = null;
         if (v.rec !== r) { traceStale("restartTimer", r); return; }
-        if (!v.active || v.stopping || v.muted) return;
+        if (!v.active || v.stopping || v.muted || v.needsGesture) return;
         v.stats.restarts++;
         v.restartVia = "onend";
+        // The reused object gets its own ledger row too: this is the most
+        // common start of all, and without a row the ledger would only ever
+        // describe the first session of a conversation.
+        sessionAttempt(r, "onend");
         traceEvent("rec.restart", "#" + r.__id + " via onend (object reused)");
         try { v.rec.start(); }
         catch (e) {
-          traceEvent("rec.restart.throw", String(e && e.name || e));
-          try { v.rec = buildRecognizer(); v.rec.start(); }
-          catch (e2) { failVoice(t("voiceFailed")); return; }
+          traceEvent("rec.restart.throw", "#" + r.__id + " " + String(e && e.name || e));
+          sessionClose("throw");
+          if (!startRecogniser("onend.rebuild")) { failVoice(t("voiceFailed")); return; }
         }
         renderDiag();
       }, RESTART_DELAY_MS);
@@ -1894,6 +2029,9 @@
 
   // ---- One tap starts a whole conversation --------------------------------
   d["mic-btn"].addEventListener("click", function () {
+    // Waiting for a gesture: THIS TAP is the user activation Android wanted.
+    // Resume listening rather than ending the session.
+    if (v.active && v.needsGesture) { resumeFromGesture(); return; }
     if (v.active) { endVoice(false); return; }
     startVoice();
   });
@@ -1920,50 +2058,24 @@
     traceReset();
     sessions = []; sess = null;
     v.stats.lostResults = 0; v.stats.staleBy = {};
+    v.stats.notAllowedAfterAudio = 0; v.stats.gestureWaits = 0;
+    v.audioEverFlowed = false; v.finalsEver = false;
+    v.notAllowedRetries = 0; v.needsGesture = false;
     v.stats.built = 0; v.stats.started = 0; v.stats.ended = 0;
     v.stats.restarts = 0; v.stats.aborted = 0; v.stats.noSpeech = 0;
     v.stopping = false;
     v.muted = false;
 
-    // Probe permission first so a denial is reported clearly instead of
-    // hanging silently, which is the known Android Chrome failure mode.
-    //
-    // The stream is now HELD for the life of the voice session instead of
-    // being stopped immediately. Android ends and reopens the recognition
-    // session every few seconds, and each reopen used to re-acquire the
-    // microphone from scratch -- a fresh capture route and audio-focus
-    // transition every time. That churn is the leading suspect for the
-    // repeated clicks Luis hears while the page is simply listening. Holding
-    // one stream keeps the capture route warm across those restarts.
-    //
-    // It is released by mute, End voice, backgrounding and failure, so the
-    // microphone is never held while the UI is not showing an active session.
-    var probe = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
-      ? navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-          releaseMicStream();
-          v.stats.micAcquired++;
-          if (HOLD_MIC_STREAM) {
-            v.micStream = stream;
-            traceEvent("mic.hold", "stream held for session");
-          } else {
-            // 149d94e behaviour: prove permission, then hand the device back
-            // so SpeechRecognition owns it outright.
-            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
-            traceEvent("mic.probe", "released to recogniser");
-          }
-        })
-      : Promise.resolve();
-
-    probe.then(function () {
-      try {
-        v.rec = buildRecognizer();
-        v.rec.start();
-        v.active = true;
-        v.startedAt = Date.now();
-        traceEvent("voice.start");
-        setPhase("listening");
-        armIdle(); armMax();
-      } catch (e) { failVoice(t("voiceFailed")); }
+    // One shared path for acquiring the microphone: the probe completes and
+    // the temporary stream is released BEFORE the recogniser starts, never
+    // underneath it. page.visible and unmute use the same helper.
+    acquireMicThen(function () {
+      v.active = true;
+      v.startedAt = Date.now();
+      traceEvent("voice.start");
+      if (!startRecogniser("start")) { failVoice(t("voiceFailed")); return; }
+      setPhase("listening");
+      armIdle(); armMax();
     }, function () { failVoice(t("permissionDenied")); });
   }
 
@@ -1979,46 +2091,46 @@
       // Half-spoken words captured before the tap are discarded, not sent.
       v.assembler.discard();
       clearInterruption();
+      if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
       v.lastInterim = "";
       v.userSpeaking = false;
+      v.needsGesture = false;            // a mute supersedes a pending tap
+      v.notAllowedRetries = 0;
       clearGateTimer();
       v.ttsEpoch++;                      // orphan any pending gate release
       v.gate = "open";
       if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
       if (v.rec) { try { v.rec.abort(); } catch (e) {} }
       v.rec = null;                      // any late callback is now stale
-      releaseMicStream();              // a real mute releases the device
-      v.muted = true;
+      v.listening = false;
+      releaseMicStream();                // a real mute releases the device
       traceEvent("mute.on");
-      setPhase("listening");           // phase is the assistant; mute is the user
+      setPhase("listening");             // phase is the assistant; mute is the user
       renderVoice();
     } else {
-      v.muted = false;
       v.dedupe.reset();
       v.assembler.discard();
       clearInterruption();
+      if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
       v.lastInterim = "";
       v.userSpeaking = false;
       clearGateTimer();
       v.gate = "open";
       v.ttsEpoch++;
       v.muted = false;
+      v.needsGesture = false;
+      v.notAllowedRetries = 0;
       traceEvent("mute.off");
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-          releaseMicStream();
-          v.stats.micAcquired++;
-          if (HOLD_MIC_STREAM) {
-            v.micStream = stream;
-            traceEvent("mic.hold", "stream reacquired");
-          } else {
-            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
-            traceEvent("mic.probe", "released to recogniser");
-          }
-        }, function () { /* the recogniser will report a real denial */ });
-      }
-      try { v.rec = buildRecognizer(); v.rec.start(); setPhase("listening"); touchIdle(); }
-      catch (e) { failVoice(t("voiceFailed")); }
+      // Same ordering as startVoice: probe completes and the temporary stream
+      // is released BEFORE the recogniser starts, never underneath it.
+      acquireMicThen(function () {
+        if (!v.active || v.muted) return;
+        if (!startRecogniser("unmute")) { failVoice(t("voiceFailed")); return; }
+        setPhase("listening");
+        touchIdle();
+        renderVoice();
+      }, function () { failVoice(t("permissionDenied")); });
+      renderVoice();
     }
   }
 
@@ -2043,6 +2155,8 @@
     v.userSpeaking = false;
     v.backgrounded = false;
     v.muted = false;
+    v.needsGesture = false;
+    v.notAllowedRetries = 0;
     clearGateTimer();
     v.ttsEpoch++;                        // orphan any pending gate release
     v.gate = "open";
@@ -2053,6 +2167,39 @@
     v.dedupe.reset();
     setPhase("off");
     if (was && !silent) addMsg("system", t("voiceEnded"));
+  }
+
+  // Listening is paused until Luis taps the microphone. This is NOT mute (he
+  // did not choose it) and NOT off (the voice session, its history and the
+  // gate state all survive). It exists because Android will not let us reopen
+  // the recogniser without a user gesture, and looping on that would spin
+  // forever.
+  function requireGesture() {
+    if (v.needsGesture) return;
+    v.needsGesture = true;
+    v.stats.gestureWaits++;
+    v.listening = false;
+    v.userSpeaking = false;
+    if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
+    if (v.rec) { try { v.rec.abort(); } catch (e) {} }
+    v.rec = null;
+    traceEvent("gesture.required");
+    renderVoice();
+  }
+
+  // Luis tapped. That tap is the user activation Android was waiting for.
+  function resumeFromGesture() {
+    if (!v.active || !v.needsGesture) return;
+    v.needsGesture = false;
+    v.notAllowedRetries = 0;
+    traceEvent("gesture.resume");
+    acquireMicThen(function () {
+      if (!v.active || v.muted) return;
+      if (!startRecogniser("gesture")) { failVoice(t("voiceFailed")); return; }
+      setPhase("listening");
+      touchIdle();
+      renderVoice();
+    }, function () { failVoice(t("permissionDenied")); });
   }
 
   // A voice failure must never take the app down: voice stops, text continues.
@@ -2121,31 +2268,17 @@
     } else if (v.backgrounded) {
       v.backgrounded = false;
       traceEvent("page.visible");
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-          releaseMicStream();
-          v.stats.micAcquired++;
-          if (HOLD_MIC_STREAM) {
-            v.micStream = stream;
-            traceEvent("mic.hold", "stream reacquired");
-          } else {
-            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
-            traceEvent("mic.probe", "released to recogniser");
-          }
-        }, function () { /* the recogniser will report a real denial */ });
-      }
+      if (v.needsGesture) { renderVoice(); return; }   // already waiting for a tap
       if (!v.rec) {
-        v.restartVia = "page.visible";
-        try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
-        catch (e) {
-          v.rec = null;
-          v.restartTimer = setTimeout(function () {
-            v.restartTimer = null;
-            if (!v.active || v.stopping || v.muted || v.rec) return;
-            try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
-            catch (e2) { failVoice(t("voiceFailed")); }
-          }, RESTART_DELAY_MS);
-        }
+        // Probe FIRST, release the temporary stream, THEN start -- the same
+        // order startVoice uses. Starting synchronously here is what let the
+        // probe's own getTracks().stop() land underneath a running recogniser.
+        acquireMicThen(function () {
+          if (!v.active || v.stopping || v.muted || v.needsGesture || v.rec) return;
+          if (startRecogniser("page.visible")) v.stats.restarts++;
+          else requireGesture();
+          renderVoice();
+        }, function () { requireGesture(); });
       }
       renderVoice();
     }

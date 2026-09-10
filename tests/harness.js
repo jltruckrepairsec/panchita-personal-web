@@ -136,6 +136,7 @@ function createApp(opts) {
       this.started++;
       if (this.failNextStart) { this.failNextStart = false; throw new Error("InvalidStateError"); }
       this.live = true;
+      mic.order.push("rec.start");
       // A real engine does not become live synchronously. onstart and
       // onaudiostart arrive after the service spins up, and the microphone is
       // DEAF for that whole window -- which is the gap the page has to survive.
@@ -270,14 +271,27 @@ function createApp(opts) {
 
   /* Track microphone acquisition. Each getUserMedia is a fresh capture route
      on the device, which is the leading suspect for the clicks Luis hears. */
-  const mic = { acquisitions: 0, open: 0 };
+  const mic = { acquisitions: 0, open: 0, deny: false, order: [] };
   sandbox.navigator = {
     mediaDevices: {
       getUserMedia: () => {
         mic.acquisitions++;
+        if (mic.deny) {
+          mic.order.push("probe.denied");
+          return Promise.reject(new Error("NotAllowedError"));
+        }
         mic.open++;
-        const track = { stop() { if (!track._stopped) { track._stopped = true; mic.open--; } } };
-        return Promise.resolve({ getTracks: () => [track] });
+        const track = {
+          stop() {
+            if (!track._stopped) { track._stopped = true; mic.open--; mic.order.push("probe.stop"); }
+          }
+        };
+        // Resolve on a later turn, the way a real permission prompt does, so a
+        // path that starts the recogniser synchronously is caught.
+        return new Promise((res) => setImmediate(() => {
+          mic.order.push("probe.resolved");
+          res({ getTracks: () => [track] });
+        }));
       }
     }
   };
@@ -364,6 +378,11 @@ function createApp(opts) {
     micAcquisitions() { return mic.acquisitions; },
     /* How many capture streams are open right now. */
     micStreamsOpen() { return mic.open; },
+    /* Interleaved record of probe resolution, temporary-stream release and
+       recogniser start, so ordering bugs are visible rather than inferred. */
+    micOrder() { return mic.order.slice(); },
+    resetMicOrder() { mic.order.length = 0; },
+    denyMic(on) { mic.deny = on !== false; },
     phase() { return api.diag()["phase"]; },
     /* The composite state the engine reports: LISTENING, USER_SPEAKING,
        USER_PAUSED, ASSISTANT_SPEAKING, MANUALLY_MUTED, THINKING, OFF. */
