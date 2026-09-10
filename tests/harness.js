@@ -16,11 +16,18 @@ const vm = require("vm");
 
 const PAGE = path.join(__dirname, "..", "voice-v2.html");
 
-function readPageScript() {
+function readPageScript(opts) {
   const html = fs.readFileSync(PAGE, "utf8");
   const m = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!m) throw new Error("no <script> block found in voice-v2.html");
-  return m[1];
+  let src = m[1];
+  // Flip the page's own diagnostic switch so both branches are testable.
+  if (opts && opts.holdMicStream !== undefined) {
+    const re = /var HOLD_MIC_STREAM = (?:true|false);/;
+    if (!re.test(src)) throw new Error("HOLD_MIC_STREAM switch not found in voice-v2.html");
+    src = src.replace(re, "var HOLD_MIC_STREAM = " + (opts.holdMicStream ? "true" : "false") + ";");
+  }
+  return src;
 }
 
 function readPureHelpers() {
@@ -284,7 +291,7 @@ function createApp(opts) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(readPageScript(), sandbox, { filename: "voice-v2.html" });
+  vm.runInContext(readPageScript(opts), sandbox, { filename: "voice-v2.html" });
 
   const api = {
     clock, els, recognizers, spoken, gatewayCalls, sandbox,
@@ -338,6 +345,21 @@ function createApp(opts) {
       return i < 0 ? [] : txt.slice(i).split("\n").slice(1).filter((l) => l.trim());
     },
     traceHas(name) { return api.trace().some((l) => l.indexOf(name) >= 0); },
+    /* The per-session ledger rows, newest first. */
+    sessionRows() { return api.diagSection("-- recogniser sessions", "-- session start"); },
+    /* The pinned session-start events. */
+    traceHeadLines() { return api.diagSection("-- session start", "-- event trace"); },
+    diagSection(from, to) {
+      const panel = getEl("mic-diag");
+      const toggle = getEl("diag-toggle");
+      if (panel.classes.has("visible")) toggle.fire("click");
+      toggle.fire("click");
+      const txt = String(panel.textContent);
+      const i = txt.indexOf(from);
+      if (i < 0) return [];
+      const j = txt.indexOf(to, i);
+      return txt.slice(i, j < 0 ? undefined : j).split("\n").slice(1).filter((l) => l.trim());
+    },
     /* How many times the device microphone was acquired from scratch. */
     micAcquisitions() { return mic.acquisitions; },
     /* How many capture streams are open right now. */

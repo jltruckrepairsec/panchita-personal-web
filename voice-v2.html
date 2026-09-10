@@ -299,12 +299,32 @@
   // Free engine only. Paid Realtime is NOT enabled and NOT reachable from here.
   var PAID_REALTIME_ENABLED = false;
 
-  // Every millisecond here is time the microphone is DEAF: Android ends the
-  // recognition session at its own endpointer, and until the next one is
-  // running Luis's words are not being captured at all. Kept short for that
-  // reason. The silence countdown is frozen across the gap regardless.
-  var RESTART_DELAY_MS = 150;          // gap before reopening the recogniser
-  var TRACE_MAX = 80;                  // events kept for the diagnostic panel
+  // CONTROLLED DIAGNOSTIC ROLLBACK -- not a root-cause fix.
+  //
+  // Exactly two things in the audio path differ between 149d94e (where the
+  // phone DID recognise speech, albeit splitting sentences) and 775a61e
+  // (where the phone produced audio.start but no speech.start, no interims
+  // and zero turns): this delay, and HOLD_MIC_STREAM below. Both are restored
+  // to their 149d94e values so the next physical test runs on the last known
+  // recognising path while the new instrumentation identifies the real cause.
+  //
+  // Restarting too soon after onend is a plausible way to get a session that
+  // opens an audio route and then never delivers a result, so 150ms is not
+  // obviously safe. Reverted to the value that was known to work.
+  var RESTART_DELAY_MS = 350;          // gap before reopening the recogniser
+
+  // Holding one capture for the whole session was a hypothesis about the
+  // clicks. It has not been confirmed, and it is a suspect in the recognition
+  // failure: audio.start proves the API opened an input, NOT that samples are
+  // reaching the recogniser, so a page-held exclusive capture could still
+  // silence it. Default OFF = the 149d94e behaviour (probe, then release).
+  // Flip to true only to test the click hypothesis deliberately.
+  var HOLD_MIC_STREAM = false;
+  var TRACE_MAX = 220;                 // events kept for the diagnostic panel
+  var TRACE_HEAD = 24;                 // session-start events, pinned so the
+                                       // beginning can never scroll away
+  var TRACE_SHOW = 60;                 // recent events rendered
+  var SESSION_LOG = 14;                // recogniser sessions summarised
   // A frozen countdown must never strand a finished turn if the microphone
   // does not come back at all.
   var FREEZE_MAX_MS = 5000;
@@ -405,6 +425,7 @@
   // truncated hard, and nothing here is transmitted anywhere -- the trace
   // lives in memory on Luis's phone and dies with the page.
   var trace = [];
+  var traceHead = [];      // the first events of the session, never evicted
   var traceT0 = 0;
 
   function traceEvent(name, detail) {
@@ -418,10 +439,22 @@
       name: name,
       detail: detail === undefined ? "" : String(detail)
     });
+    if (traceHead.length < TRACE_HEAD) traceHead.push(trace[trace.length - 1]);
     if (trace.length > TRACE_MAX) trace = trace.slice(-TRACE_MAX);
   }
 
-  function traceReset() { trace = []; traceT0 = 0; }
+  function traceReset() { trace = []; traceHead = []; traceT0 = 0; }
+
+  // A callback that arrived from a recogniser this session no longer owns.
+  // Recorded PER HANDLER, because the difference matters: a stale onresult is
+  // a LOST TRANSCRIPT, while a stale onend after an abort is routine. The old
+  // build lumped all six into one counter and traced only two, which is why
+  // the last physical test could not say whether Luis's words were dropped.
+  function traceStale(where, r) {
+    v.stats.stale++;
+    v.stats.staleBy[where] = (v.stats.staleBy[where] || 0) + 1;
+    traceEvent("STALE." + where, "#" + (r && r.__id));
+  }
 
   // Truncated hard: enough to follow a merge, never a full transcript.
   function snip(text) {
@@ -432,10 +465,70 @@
   function traceLines() {
     if (!trace.length) return ["(no events yet)"];
     var out = [];
-    for (var i = trace.length - 1; i >= 0 && out.length < 26; i--) {
+    for (var i = trace.length - 1; i >= 0 && out.length < TRACE_SHOW; i--) {
       var e = trace[i];
       out.push("  +" + String(e.since).padStart(6) + "ms  (+" + String(e.gap).padStart(5) +
                ")  " + e.name + (e.detail ? "  " + e.detail : ""));
+    }
+    return out;
+  }
+
+  // ---- SESSION LEDGER ------------------------------------------------------
+  // One row per recogniser session, answering the question the last physical
+  // test could not: for THIS session, did an audio route open, did the engine
+  // ever report speech, and did any result arrive? A row reading
+  // "audio=Y spch=0 res=0" is a session that got the microphone and heard
+  // nothing -- which is exactly the failure to explain.
+  var sessions = [];
+  var sess = null;
+
+  function sessionOpen(r, via) {
+    sess = {
+      id: r ? r.__id : "?", n: sessions.length + 1, via: via || "?",
+      at: Date.now(), audio: false, speech: 0, interim: 0, final: 0,
+      staleRes: 0, ended: 0, why: ""
+    };
+    sessions.push(sess);
+    if (sessions.length > SESSION_LOG) sessions = sessions.slice(-SESSION_LOG);
+  }
+
+  function sessionMark(field, n) {
+    if (!sess) return;
+    if (field === "audio") sess.audio = true;
+    else sess[field] = (sess[field] || 0) + (n === undefined ? 1 : n);
+  }
+
+  function sessionClose(why) {
+    if (!sess) return;
+    sess.ended = Date.now();
+    sess.why = why || "end";
+    sess = null;
+  }
+
+  function sessionLines() {
+    if (!sessions.length) return ["(no sessions yet)"];
+    var out = [];
+    for (var i = sessions.length - 1; i >= 0; i--) {
+      var x = sessions[i];
+      var dur = (x.ended ? x.ended - x.at : Date.now() - x.at) / 1000;
+      out.push("  s" + x.n + " #" + x.id + " " + dur.toFixed(1) + "s " +
+               "audio=" + (x.audio ? "Y" : "N") +
+               " spch=" + x.speech +
+               " int=" + x.interim +
+               " fin=" + x.final +
+               (x.staleRes ? " LOSTres=" + x.staleRes : "") +
+               " via=" + x.via +
+               (x.ended ? " " + x.why : " ..."));
+    }
+    return out;
+  }
+
+  function traceHeadLines() {
+    if (!traceHead.length) return ["(nothing yet)"];
+    var out = [];
+    for (var i = 0; i < traceHead.length; i++) {
+      var e = traceHead[i];
+      out.push("  +" + String(e.since) + "ms  " + e.name + (e.detail ? "  " + e.detail : ""));
     }
     return out;
   }
@@ -779,6 +872,7 @@
     recSeq: 0,
     thawTimer: null,
     startedAt: 0,
+    restartVia: "",
     quarantineConfirmed: false,   // proven human: heard after her speaker died
     speakerStoppedAt: 0,
     prefixTimer: null,
@@ -805,7 +899,8 @@
     stats: { turns: 0, dups: 0, echoes: 0, restarts: 0, errors: 0, interims: 0,
              stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0,
              carried: 0, prefixDropped: 0, onsets: 0,
-             built: 0, started: 0, ended: 0, noSpeech: 0, aborted: 0, micAcquired: 0 }
+             built: 0, started: 0, ended: 0, noSpeech: 0, aborted: 0, micAcquired: 0,
+             lostResults: 0, staleBy: {} }
   };
 
   var STR = {
@@ -972,6 +1067,16 @@
   });
   // Recogniser restarts per minute since voice started. While Luis is silent
   // this is the churn rate to compare against how often he hears a click.
+  function staleBreakdown() {
+    var out = [], k;
+    for (k in v.stats.staleBy) {
+      if (Object.prototype.hasOwnProperty.call(v.stats.staleBy, k)) {
+        out.push(k + "=" + v.stats.staleBy[k]);
+      }
+    }
+    return out.length ? out.join(" ") : "(none)";
+  }
+
   function restartRate() {
     if (!v.startedAt) return "0.0";
     var mins = (Date.now() - v.startedAt) / 60000;
@@ -1020,14 +1125,24 @@
       "no-speech: " + v.stats.noSpeech,
       "restart rate: " + restartRate() + "/min",
       "mic acquisitions: " + v.stats.micAcquired,
+      "hold mic stream: " + HOLD_MIC_STREAM + "  (false = 149d94e path)",
+      "restart delay: " + RESTART_DELAY_MS + "ms",
+      "-- stale callbacks, by handler --",
+      "TRANSCRIPTS LOST (stale onresult): " + v.stats.lostResults,
+      "stale total: " + v.stats.stale + "   " + staleBreakdown(),
       "interims ignored: " + v.stats.interims,
       "finals coalesced: " + v.stats.coalesced,
       "stale callbacks ignored: " + v.stats.stale,
       "engine endpointing: advisory only (never ends a turn)",
       "turn max: " + TURN_MAX_MS + "ms",
       "",
-      "-- event trace, newest first --"
-    ].concat(traceLines()).join("\n");
+      "-- recogniser sessions, newest first --",
+      "   audio=Y spch=0 fin=0 means: got the mic, heard nothing"
+    ].concat(sessionLines())
+     .concat(["", "-- session start (pinned, never scrolls) --"])
+     .concat(traceHeadLines())
+     .concat(["", "-- event trace, newest first --"])
+     .concat(traceLines()).join("\n");
   }
 
   // ==========================================================================
@@ -1303,6 +1418,7 @@
       v.rec = null;                       // drop ownership FIRST, so the onend
       if (old) { try { old.abort(); } catch (e) {} }   // abort() fires is stale
       v.stats.micResets++;
+      v.restartVia = "gate.reset";
     }
     v.assembler.discard();
 
@@ -1496,7 +1612,9 @@
     // The session is running. Audio is flowing again, so the silence countdown
     // that was frozen across the restart gap picks up where it left off.
     r.onstart = function () {
-      if (v.rec !== r) { v.stats.stale++; traceEvent("rec.start.STALE", "#" + r.__id); return; }
+      if (v.rec !== r) { traceStale("onstart", r); return; }
+      sessionOpen(r, v.restartVia || "start");
+      v.restartVia = "";
       v.stats.started++;
       v.listening = true;
       traceEvent("rec.start", "#" + r.__id);
@@ -1505,14 +1623,15 @@
     };
 
     r.onaudiostart = function () {
-      if (v.rec !== r) return;
+      if (v.rec !== r) { traceStale("onaudiostart", r); return; }
       v.listening = true;
+      sessionMark("audio");
       traceEvent("audio.start", "#" + r.__id);
       if (v.assembler.release()) traceEvent("timer.resume", v.assembler.remainingMs() + "ms left");
     };
 
     r.onaudioend = function () {
-      if (v.rec !== r) return;
+      if (v.rec !== r) { traceStale("onaudioend", r); return; }
       v.listening = false;
       traceEvent("audio.end", "#" + r.__id);
     };
@@ -1522,7 +1641,8 @@
     // barge-in as prompt as this API allows, and it re-arms the silence window
     // the instant he resumes after a pause.
     r.onspeechstart = function () {
-      if (v.rec !== r) { v.stats.stale++; return; }
+      if (v.rec !== r) { traceStale("onspeechstart", r); return; }
+      sessionMark("speech");
       traceEvent("speech.start", "#" + r.__id);
       if (!v.active || v.muted) return;
       v.userSpeaking = true;
@@ -1548,7 +1668,7 @@
     // finished. On Android this is immediately followed by onend, which is the
     // real problem: the session dies here and we go deaf.
     r.onspeechend = function () {
-      if (v.rec !== r) { v.stats.stale++; return; }
+      if (v.rec !== r) { traceStale("onspeechend", r); return; }
       traceEvent("speech.end", "#" + r.__id);
       v.userSpeaking = false;
       renderVoice();
@@ -1558,7 +1678,24 @@
       // Stale-callback protection. A recogniser that has been aborted, replaced
       // on restart, muted or ended can still deliver queued events. Only the
       // recogniser this session currently owns may speak for it.
-      if (v.rec !== r) { v.stats.stale++; return; }
+      // THIS ONE LOSES A TRANSCRIPT. The previous build counted it in a shared
+      // bucket and wrote no trace line, which is exactly why the last physical
+      // test could not say whether Luis's words were dropped here or never
+      // arrived at all.
+      if (v.rec !== r) {
+        traceStale("onresult", r);
+        v.stats.lostResults++;
+        sessionMark("staleRes");
+        var lostText = "";
+        try {
+          for (var k = ev.resultIndex; k < ev.results.length; k++) {
+            if (ev.results[k] && ev.results[k][0]) lostText = ev.results[k][0].transcript;
+          }
+        } catch (eLost) { /* non-fatal */ }
+        traceEvent("LOST.transcript", snip(lostText));
+        renderDiag();
+        return;
+      }
       if (!v.active || v.muted) return;
       var now = Date.now();
       // Continuous mode accumulates results; only walk the new ones.
@@ -1575,6 +1712,7 @@
         // restart instead of being dropped.
         if (!res.isFinal) {
           v.stats.interims++;
+          sessionMark("interim");
           if (v.stats.interims % 4 === 1) traceEvent("interim", snip(text));
           v.userSpeaking = true;
           if (v.gate === "held") {
@@ -1622,6 +1760,7 @@
         // turn buffer, as defence in depth behind the gate.
         if (v.echo.isEcho(text, now)) { v.stats.echoes++; renderDiag(); continue; }
 
+        sessionMark("final");
         traceEvent("FINAL", snip(text));
         v.lastInterim = "";
         touchIdle();
@@ -1633,7 +1772,7 @@
     };
 
     r.onerror = function (ev) {
-      if (v.rec !== r) { v.stats.stale++; return; }
+      if (v.rec !== r) { traceStale("onerror", r); return; }
       var code = ev && ev.error;
       traceEvent("rec.error", code);
       if (code === "no-speech") { v.stats.noSpeech++; return; }   // normal, and
@@ -1648,9 +1787,10 @@
     r.onend = function () {
       // Android Chrome ends continuous sessions on its own schedule. Reopening
       // is what keeps the microphone available for the whole conversation.
-      if (v.rec !== r) { v.stats.stale++; traceEvent("rec.end.STALE", "#" + r.__id); return; }
+      if (v.rec !== r) { traceStale("onend", r); return; }
       v.stats.ended++;
       v.listening = false;
+      sessionClose("end");
       traceEvent("rec.end", "#" + r.__id);
       if (!v.active || v.stopping || v.muted) return;
       v.userSpeaking = false;
@@ -1675,10 +1815,11 @@
       if (v.restartTimer) clearTimeout(v.restartTimer);
       v.restartTimer = setTimeout(function () {
         v.restartTimer = null;
-        if (v.rec !== r) { v.stats.stale++; return; }
+        if (v.rec !== r) { traceStale("restartTimer", r); return; }
         if (!v.active || v.stopping || v.muted) return;
         v.stats.restarts++;
-        traceEvent("rec.restart", "#" + r.__id);
+        v.restartVia = "onend";
+        traceEvent("rec.restart", "#" + r.__id + " via onend (object reused)");
         try { v.rec.start(); }
         catch (e) {
           traceEvent("rec.restart.throw", String(e && e.name || e));
@@ -1777,6 +1918,8 @@
     v.ttsEpoch++;
     v.recentTurns = [];
     traceReset();
+    sessions = []; sess = null;
+    v.stats.lostResults = 0; v.stats.staleBy = {};
     v.stats.built = 0; v.stats.started = 0; v.stats.ended = 0;
     v.stats.restarts = 0; v.stats.aborted = 0; v.stats.noSpeech = 0;
     v.stopping = false;
@@ -1798,9 +1941,16 @@
     var probe = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
       ? navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
           releaseMicStream();
-          v.micStream = stream;
           v.stats.micAcquired++;
-          traceEvent("mic.hold", "stream acquired");
+          if (HOLD_MIC_STREAM) {
+            v.micStream = stream;
+            traceEvent("mic.hold", "stream held for session");
+          } else {
+            // 149d94e behaviour: prove permission, then hand the device back
+            // so SpeechRecognition owns it outright.
+            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
+            traceEvent("mic.probe", "released to recogniser");
+          }
         })
       : Promise.resolve();
 
@@ -1857,9 +2007,14 @@
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
           releaseMicStream();
-          v.micStream = stream;
           v.stats.micAcquired++;
-          traceEvent("mic.hold", "stream reacquired");
+          if (HOLD_MIC_STREAM) {
+            v.micStream = stream;
+            traceEvent("mic.hold", "stream reacquired");
+          } else {
+            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
+            traceEvent("mic.probe", "released to recogniser");
+          }
         }, function () { /* the recogniser will report a real denial */ });
       }
       try { v.rec = buildRecognizer(); v.rec.start(); setPhase("listening"); touchIdle(); }
@@ -1969,12 +2124,18 @@
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
           releaseMicStream();
-          v.micStream = stream;
           v.stats.micAcquired++;
-          traceEvent("mic.hold", "stream reacquired");
+          if (HOLD_MIC_STREAM) {
+            v.micStream = stream;
+            traceEvent("mic.hold", "stream reacquired");
+          } else {
+            try { stream.getTracks().forEach(function (tr) { tr.stop(); }); } catch (e) {}
+            traceEvent("mic.probe", "released to recogniser");
+          }
         }, function () { /* the recogniser will report a real denial */ });
       }
       if (!v.rec) {
+        v.restartVia = "page.visible";
         try { v.rec = buildRecognizer(); v.rec.start(); v.stats.restarts++; }
         catch (e) {
           v.rec = null;

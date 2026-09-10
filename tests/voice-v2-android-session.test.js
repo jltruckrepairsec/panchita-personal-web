@@ -141,8 +141,26 @@ test("idle churn is counted so the phone can be compared against it", async () =
   assert.strictEqual(a.voiceActive(), true, "idle churn killed the session");
 });
 
-test("the microphone stream is held across restarts, not re-acquired", async () => {
+/* DEFAULT: the 149d94e path. The page probes permission and hands the device
+   straight back, so SpeechRecognition owns the microphone outright. This is
+   the controlled diagnostic rollback, not a confirmed fix. */
+test("by default the mic is probed and released, never held", async () => {
   const a = await live();
+  assert.strictEqual(a.diag()["hold mic stream"].indexOf("false"), 0,
+    "the switch is not defaulting off: " + a.diag()["hold mic stream"]);
+  assert.strictEqual(a.micStreamsOpen(), 0, "a capture stream is being held by default");
+  for (let i = 0; i < 6; i++) {
+    a.current().androidNoSpeech();
+    await a.settle(700);
+  }
+  assert.strictEqual(a.micStreamsOpen(), 0, "a restart left a capture stream open");
+  assert.strictEqual(a.diag()["restart delay"], "350ms",
+    "restart delay is not back on the known-good value");
+});
+
+/* The click hypothesis, still available behind the switch. */
+test("with the switch on, the stream is held across restarts", async () => {
+  const a = await live({ holdMicStream: true });
   const before = a.micAcquisitions();
   for (let i = 0; i < 6; i++) {
     a.current().androidNoSpeech();
@@ -153,8 +171,8 @@ test("the microphone stream is held across restarts, not re-acquired", async () 
   assert.strictEqual(a.diag()["mic stream held"], "true", "no stream is being held");
 });
 
-test("mute and End voice release the held microphone stream", async () => {
-  const a = await live();
+test("with the switch on, mute and End voice release the held stream", async () => {
+  const a = await live({ holdMicStream: true });
   assert.strictEqual(a.micStreamsOpen(), 1, "no stream held while listening");
   await a.mute();
   assert.strictEqual(a.micStreamsOpen(), 0, "mute did not release the microphone");
@@ -165,15 +183,17 @@ test("mute and End voice release the held microphone stream", async () => {
   assert.strictEqual(a.micStreamsOpen(), 0, "End voice did not release the microphone");
 });
 
-test("backgrounding releases the microphone and returning re-acquires it", async () => {
-  const a = await live();
-  await a.setVisibility("hidden");
-  await a.settle(300);
-  assert.strictEqual(a.micStreamsOpen(), 0, "the mic stayed open while backgrounded");
-  assert.strictEqual(a.muted(), false, "backgrounding muted the UI");
-  await a.setVisibility("visible");
-  await a.settle(600);
-  assert.strictEqual(a.micStreamsOpen(), 1, "the mic was not re-acquired on return");
+test("backgrounding never leaves a capture open, either way", async () => {
+  for (const hold of [false, true]) {
+    const a = await live({ holdMicStream: hold });
+    await a.setVisibility("hidden");
+    await a.settle(300);
+    assert.strictEqual(a.micStreamsOpen(), 0, "hold=" + hold + ": mic stayed open while backgrounded");
+    assert.strictEqual(a.muted(), false, "hold=" + hold + ": backgrounding muted the UI");
+    await a.setVisibility("visible");
+    await a.settle(600);
+    assert.strictEqual(a.micStreamsOpen(), hold ? 1 : 0, "hold=" + hold + ": wrong state on return");
+  }
 });
 
 /* -- The trace itself ----------------------------------------------------- */
@@ -220,4 +240,65 @@ test("a complete-sounding turn gets NO extra delay", async () => {
     "a finished sentence was given the thinking-pause grace");
   await a.settle(GRACE_MS + 900);
   assert.strictEqual(a.turnRequests().length, 1, "the finished turn did not go through");
+});
+
+/* -- The instrumentation must be able to name the failure ----------------- */
+test("a transcript dropped by the stale guard is reported, not silently lost", async () => {
+  // The exact blind spot from the last physical test: results arriving on a
+  // recogniser the session no longer owns. Previously this bumped a shared
+  // counter and wrote nothing, so it was indistinguishable from "no audio".
+  const a = await live();
+  const orphan = a.current();
+  orphan.failNextStart = true;
+  orphan.androidEndpoint();
+  await a.settle(1200);                       // page builds a replacement
+  assert.notStrictEqual(a.current(), orphan, "the recogniser was not replaced");
+
+  orphan.emitAppend("Panchita quiero que me ayudes", true);   // late, on the old one
+  await a.settle(300);
+
+  assert.strictEqual(a.stat("TRANSCRIPTS LOST (stale onresult)"), 1,
+    "a lost transcript was not counted");
+  assert.ok(a.traceHas("STALE.onresult"), "the stale onresult was not traced");
+  assert.ok(a.traceHas("LOST.transcript"), "the lost text was not traced");
+  assert.match(a.diag()["stale total"], /onresult=1/,
+    "the per-handler breakdown does not name onresult: " + a.diag()["stale total"]);
+});
+
+test("the session ledger separates 'got the mic and heard nothing' from 'no mic'", async () => {
+  const a = await live();
+  // A session that opens an audio route and hears nothing -- the phone's case.
+  a.current().androidNoSpeech();
+  await a.settle(900);
+  const rows = a.diag.sessionRows ? a.diag.sessionRows() : a.sessionRows();
+  assert.ok(rows.length >= 1, "no session rows");
+  assert.ok(rows.some((r) => /audio=Y/.test(r) && /spch=0/.test(r) && /fin=0/.test(r)),
+    "no row describing a session that got the mic and heard nothing: " + JSON.stringify(rows));
+
+  // And a session that does hear something must read differently.
+  await sayThenAndroidEndpoint(a, "Cierra la orden");
+  await a.settle(400);
+  const rows2 = a.sessionRows();
+  assert.ok(rows2.some((r) => /spch=[1-9]/.test(r) || /fin=[1-9]/.test(r)),
+    "a session with real speech is indistinguishable: " + JSON.stringify(rows2));
+});
+
+test("the session-start trace is pinned and cannot scroll away", async () => {
+  const a = await live();
+  for (let i = 0; i < 40; i++) {            // flood the ring far past its size
+    a.current().androidNoSpeech();
+    await a.settle(420);
+  }
+  const head = a.traceHeadLines();
+  assert.ok(head.some((l) => l.indexOf("voice.start") >= 0),
+    "voice.start scrolled out of the pinned head: " + JSON.stringify(head.slice(0, 4)));
+  assert.ok(head.some((l) => l.indexOf("mic.probe") >= 0 || l.indexOf("mic.hold") >= 0),
+    "the microphone decision scrolled away");
+});
+
+test("each restart records which call site caused it", async () => {
+  const a = await live();
+  a.current().androidNoSpeech();
+  await a.settle(900);
+  assert.ok(a.traceHas("via onend"), "the restart source was not recorded");
 });
