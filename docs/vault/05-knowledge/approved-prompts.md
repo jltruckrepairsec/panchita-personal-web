@@ -27,9 +27,9 @@ assistant skills, neither of which is versioned here.
 Two bodies of prompt-shaped text already exist and are unversioned:
 
 * **Seller scripts, Spanish and English** — part of the wholesaling playbook.
-  See [03 · Real Estate](../03-modules/real-estate.md).
+  See [03 · Real Estate](../03-business-domains/real-estate.md).
 * **Shop social content and review requests** — see
-  [03 · Marketing](../03-modules/marketing.md).
+  [03 · Marketing](../03-business-domains/marketing.md).
 
 Both are customer-facing text produced on the owner's behalf. That is exactly
 the category that should be approved and frozen rather than regenerated

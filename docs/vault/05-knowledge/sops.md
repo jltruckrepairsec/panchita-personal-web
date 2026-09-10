@@ -40,11 +40,11 @@ as whoever holds them keeps holding them.
 Business procedures, which are entirely absent: shop intake and quoting,
 Shopmonkey reporting cadence, wholesaling daily routine. Those live today inside
 assistant skills outside this repository — see the note in
-[03 — Modules](../03-modules/README.md) about why that is a pointer, not a
+[03 — Business Domains](../03-business-domains/README.md) about why that is a pointer, not a
 record.
 
 ## Why this page matters more than it looks
 
-[03 · University](../03-modules/university.md) most plausibly teaches from
+[11 · University / Academy](../11-learning-and-simulation/university-academy.md) most plausibly teaches from
 SOPs. If so, this page is that module's input, and its emptiness is why that
 module has no shape yet.

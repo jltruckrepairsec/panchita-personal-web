@@ -1,7 +1,8 @@
 # Physical Tests
 
 > **Status:** sourced — hardware testing **has run**; two failures are open.
-> **Lifecycle:** HARDWARE VERIFICATION PENDING
+> **Lifecycle:** PHYSICAL ANDROID FAILURE UNDER DIAGNOSIS · HARDWARE
+> VERIFICATION PENDING
 > **Basis:** `ed568e6` for the protocol; findings dated 2026-09-09
 > **Last reviewed:** 2026-09-10
 

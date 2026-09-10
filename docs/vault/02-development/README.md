@@ -11,7 +11,7 @@ production — every page carries a `Lifecycle` field saying which it is.
 
 | Page | Status |
 | --- | --- |
-| [Voice v2](voice-v2.md) | **Deployed prototype · active development · 2 hardware failures open** |
+| [Voice v2](voice-v2.md) | **DEPLOYED PROTOTYPE · ACTIVE DEVELOPMENT · physical Android failure under diagnosis** |
 | [Memory + Date-Time](memory-and-date-time.md) | Stub |
 | [Mission Control](mission-control.md) | Stub |
 | [Builder](builder.md) | Stub |

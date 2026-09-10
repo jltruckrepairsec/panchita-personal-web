@@ -1,7 +1,8 @@
-# University
+# University / Academy
 
-> **Status:** stub — no source in this repository, no external skill, and the
-> concept is not defined anywhere the vault can see.
+> **Status:** concept — named in the Master Blueprint, no definition given.
+> Moved here from section 03 on 2026-09-10: it is a learning capability, not a
+> business domain.
 > **Lifecycle:** CONCEPT ONLY
 > **Last reviewed:** 2026-09-10
 
@@ -24,11 +25,23 @@ If that reading holds:
 ## Its likely real relationship to the rest of the vault
 
 If University teaches from SOPs, then [05 · SOPs](../05-knowledge/sops.md) is
-its input and this module is a consumer of the knowledge section rather than a
-producer. That would make writing the SOPs a prerequisite, and would explain
-why this module has no code yet.
+its input and this is a consumer of the knowledge section rather than a
+producer. That would make writing the SOPs a prerequisite, and would explain why
+it has no code yet.
+
+It also sits next to [Mentor](../10-platform-components/mentor.md), and the two
+need keeping apart: the plausible split is that University teaches a curriculum
+away from the work, while Mentor guides someone during it. That is inference and
+should be confirmed.
 
 ## Open questions
 
 * Is this for people or for the system?
 * Is it a Panchita capability at all, or a separate product?
+* How does it differ from [Mentor](../10-platform-components/mentor.md)?
+
+## Related
+
+* [11 — Learning & Simulation](README.md)
+* [05 · SOPs](../05-knowledge/sops.md) — the missing input
+* [10 · Mentor](../10-platform-components/mentor.md)

@@ -7,6 +7,15 @@
 > **Last reviewed:** 2026-09-10
 
 Things deliberately removed, and why, so that nobody rebuilds them by accident.
+
+> **Not to be confused with Panchita Legacy.** This page is *deprecated* —
+> obsolete or replaced technical mechanisms. **Panchita Legacy** is continuity
+> and succession: institutional knowledge, long-term stewardship, and Panchita
+> surviving changes of owners, employees, vendors, models and infrastructure.
+> Different concept, different section —
+> [12 · Legacy](../12-governance-and-legacy/legacy.md). The word collision is
+> unfortunate and deliberate to keep, because both meanings are correct in their
+> own domain.
 Both entries below are still live in production `index.html`; they are
 deprecated in Voice v2 and will be gone from production when it merges.
 

@@ -36,5 +36,5 @@ configuration, not here, and are not versioned alongside this vault.
 * Is Shopmonkey the system of record, with Panchita reading it, or does
   Panchita write back?
 
-Related: [03 · Truck Repair](../03-modules/truck-repair.md) covers the
+Related: [03 · Truck Repair](../03-business-domains/truck-repair.md) covers the
 capability; this page is meant to cover the deployment.

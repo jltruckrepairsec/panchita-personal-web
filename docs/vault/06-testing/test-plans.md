@@ -54,7 +54,7 @@ The harness that would run these already exists — it is generic over a page pa
 ## The rest of the system — no plan exists
 
 The Gateway, its rate limiter, and every module in
-[03](../03-modules/) are untested from here and untestable from here. Whether
+[03](../03-business-domains/) are untested from here and untestable from here. Whether
 they are tested at all is unknown.
 
 ## Open questions

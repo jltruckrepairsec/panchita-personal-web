@@ -45,16 +45,51 @@ Two kinds of page live here:
 
 | # | Section | Holds |
 | --- | --- | --- |
-| [00](00-master-blueprint/) | Master Blueprint | The intent: vision, constitution, architecture, roadmap |
+| [00](00-master-blueprint/) | Master Blueprint | Intent: **priority**, **principles**, vision, constitution, architecture |
 | [01](01-live-systems/) | Live Systems | What is deployed and serving today |
-| [02](02-development/) | Development | What is being built now, not yet production |
-| [03](03-modules/) | Modules | Business capability areas Panchita covers |
+| [02](02-development/) | Development | What is being built now, not production |
+| [03](03-business-domains/) | Business Domains | The work Panchita does *for* |
 | [04](04-security/) | Security | Auth, permissions, audit, incidents |
 | [05](05-knowledge/) | Knowledge | SOPs, research, lessons, approved prompts |
 | [06](06-testing/) | Testing | Plans, regression suites, hardware tests, results |
 | [07](07-change-history/) | Change History | Decisions, releases, rollbacks, deprecations |
-| [08](08-cost-and-quality/) | Cost & Quality | Cost rules, budgets, provider costs, standards |
+| [08](08-cost-and-quality/) | Cost & Quality | Cost rules, budgets, provider costs, quality |
 | [09](09-backlog/) | Backlog | Now / Next / Later / Blocked |
+| [10](10-platform-components/) | Platform Components | The machinery Panchita is *made of* |
+| [11](11-learning-and-simulation/) | Learning & Simulation | Teaching, discovery, rehearsal |
+| [12](12-governance-and-legacy/) | Governance & Legacy | Who decides, and what endures |
+
+Sections 10–12 were added on 2026-09-10 so every approved Master Blueprint
+concept has an explicit home. **A home is not a work item** — see below.
+
+## Start here
+
+* **[00 · Execution Priority](00-master-blueprint/execution-priority.md)** —
+  finish Truck Repair v1.0 first. Read this before section 10, 11 or 12 makes
+  anything look urgent.
+* [00 · Core Principles](00-master-blueprint/principles.md) — the 14
+  owner-declared principles, each with an honest evidence status.
+* [01 · Panchita Personal](01-live-systems/panchita-personal.md) — the only
+  thing in production.
+
+## Documenting ≠ committing
+
+A page in sections 10–12 with lifecycle `CONCEPT ONLY` is a **parking space, not
+a queue ticket**. It creates no commitment, no roadmap position and no priority.
+Real work lives in [09 — Backlog](09-backlog/).
+
+One concept carries a stronger cap:
+[Panchita Coin / Economy](12-governance-and-legacy/panchita-coin-economy.md) is
+**not a project, not a commitment, not a token launch, not a financial product
+and not a roadmap priority.** Read that page before referring to it anywhere.
+
+## Names that collide, deliberately
+
+| Both are correct | This one | And this one |
+| --- | --- | --- |
+| **Legacy** | [12 · Legacy](12-governance-and-legacy/legacy.md) — continuity and succession | [07 · Deprecated](07-change-history/deprecated.md) — obsolete mechanisms |
+| **Standards** | [10 · Standards](10-platform-components/standards.md) — ecosystem governance | [08 · Quality Standards](08-cost-and-quality/quality-standards.md) — engineering quality |
+| **Vision** | [00 · Vision](00-master-blueprint/vision.md) — strategic direction | [00 · Master Blueprint](00-master-blueprint/panchita-master-blueprint.md) — the map that executes it |
 
 ## Conventions
 

@@ -39,7 +39,7 @@ That last point is the likely reason this page exists as a work item.
 * Is memory per-session, per-day, or permanent?
 * Does memory cross module boundaries — does the truck-repair conversation know
   what the real-estate one said? That is a question about the module contract,
-  which blocks all of [03 — Modules](../03-modules/README.md).
+  which blocks all of [03 — Business Domains](../03-business-domains/README.md).
 
 ## Not being worked on here
 

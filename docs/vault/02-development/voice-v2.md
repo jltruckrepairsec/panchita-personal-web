@@ -4,7 +4,8 @@
 > implementation has since moved and is under active development** — see
 > *Current state* before relying on any detail on this page.
 > **Source:** `voice-v2.html`, `tests/` @ `ed568e6`
-> **Lifecycle:** DEPLOYED PROTOTYPE · ACTIVE DEVELOPMENT · HARDWARE VERIFICATION PENDING
+> **Lifecycle:** DEPLOYED PROTOTYPE · ACTIVE DEVELOPMENT · PHYSICAL ANDROID
+> FAILURE UNDER DIAGNOSIS · HARDWARE VERIFICATION PENDING
 > **Basis:** `ed568e6` (last state this vault verified). `origin/main` is at `149d94e` and moving — see *Current state* below
 > **Last reviewed:** 2026-09-10
 

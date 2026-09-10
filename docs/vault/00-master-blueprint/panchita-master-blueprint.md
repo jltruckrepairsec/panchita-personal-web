@@ -61,14 +61,48 @@ recorded with its evidence in the [Constitution](constitution.md).
    model an engine, not a room: 74 pass while two failures reproduce on a real
    phone.
 
+## The long-horizon map
+
+31 approved concepts, in four families, each with an explicit home as of
+2026-09-10. **Two are built.**
+
+| Family | Section | Concepts |
+| --- | --- | --- |
+| Business domains | [03](../03-business-domains/README.md) | Truck Repair, Financial, Real Estate / Wholesaling, Marketing, Business, Care, Sales, Recruiter, Marketplace, Capital |
+| Platform components | [10](../10-platform-components/README.md) | Panchita Core, Panchita Personal ✅, Gateway ✅, API, Central, Memory, Builder, Guardian, Mentor, Mission Control, Analytics, Standards, Network |
+| Learning & simulation | [11](../11-learning-and-simulation/README.md) | University / Academy, Research, Digital Twin / Simulator, Innovation Lab |
+| Governance & long horizon | [12](../12-governance-and-legacy/README.md) | Vision, Governance, Foundation, Legacy, AI Council, Succession, Panchita Coin / Economy |
+
+**The map is not a plan.** The current execution priority is
+[Truck Repair v1.0](execution-priority.md), and a concept having a page creates
+no commitment to build it. That distinction is the whole reason the map is safe
+to write down.
+
+## Boundaries already decided
+
+* **Central orchestrates; it does not own identity, permissions or memory.**
+  Those stay logically separable with explicit interfaces and security
+  boundaries, and Central consumes only the context it is authorized to receive
+  — [01 · Central](../01-live-systems/central.md).
+* **Multi-user is the design target**, with least privilege, explicit
+  authorization, role separation, auditability, human approval for critical
+  actions, no privilege escalation through prompts, and identity never inferred
+  from conversational claims —
+  [04 · Permissions](../04-security/permissions.md). **No actual permissions are
+  assigned.**
+
 ## What this blueprint does not yet cover
 
 Unwritten, and needed before the map above is honest end to end:
 
-* The relationship between Panchita Personal and Central — which one owns
-  identity, which one owns memory, and what crosses between them.
-* The module contract: how the Gateway decides which module answers, and what a
-  module must expose to be routable.
-* The data story: what is stored, where, for how long, and who may read it.
+* **The module contract** — how the Gateway decides which domain answers, and
+  what a domain must expose to be routable. This blocks all of section 03.
+* **The data story** — what is stored, where, for how long, and who may read it.
+* **Truck Repair v1.0's own scope.** The priority is clear; its definition of
+  done is not written anywhere.
+* **The Vision itself.** [Vision](vision.md) is defined as a concept and is
+  still empty, so the blueprint currently preserves and executes a direction
+  that has not been written down.
 
-See [Vision](vision.md) and [Architecture Map](architecture-map.md).
+See [Vision](vision.md), [Core Principles](principles.md) and
+[Architecture Map](architecture-map.md).

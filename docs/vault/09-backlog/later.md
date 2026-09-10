@@ -18,7 +18,7 @@ edge to it and the blueprint is incomplete.
 
 How the Gateway picks a module, what a module receives, what it must return,
 whether modules can call each other. This blocks all of
-[03 — Modules](../03-modules/) from being documented, and nobody can currently
+[03 — Business Domains](../03-business-domains/) from being documented, and nobody can currently
 answer "why did Panchita answer that way?" without opening n8n.
 
 ## L-3 — Memory and date-time
@@ -32,8 +32,8 @@ on X2.
 ## L-4 — Permissions model
 
 Not needed while there is one user. Needed before either
-[Financial](../03-modules/financial.md) (money) or
-[Recruiter](../03-modules/recruiter.md) (third-party personal data) is built.
+[Financial](../03-business-domains/financial.md) (money) or
+[Recruiter](../03-business-domains/recruiter.md) (third-party personal data) is built.
 Two of seven modules already depend on it.
 
 ## L-5 — Guardian
@@ -69,21 +69,25 @@ twice, against two different mechanisms
 Entirely untested. Unknown whether any of the Android findings in
 [05 · Research](../05-knowledge/research.md) transfer.
 
-## L-9b — Owner decisions the vault is holding
+## L-9b — Owner decisions still open
 
-Not work items — questions the vault cannot answer for itself, parked here so
-they are not lost:
+Resolved on 2026-09-10 and removed from this list: the three name collisions
+(Legacy, Standards, Vision) and the taxonomy expansion, both now in effect.
 
-* **Three name collisions** between blueprint modules and existing vault
-  sections: *Legacy* (vs. [07 · Deprecated](../07-change-history/deprecated.md)),
-  *Standards* (vs.
-  [08 · Quality Standards](../08-cost-and-quality/quality-standards.md)), and
-  *Vision* (vs. [00 · Vision](../00-master-blueprint/vision.md)). Nothing should
-  be filed under any of the three until they are settled.
-* **Taxonomy expansion.** 16 long-term blueprint concepts have no home, and
-  they do not all belong in [03 — Modules](../03-modules/README.md): business
-  domains, platform components, knowledge/simulation and governance/legacy are
-  four different families. Deliberately not expanded yet.
+Still open, and each is one sentence of owner input:
+
+* **Three ambiguous names**, where the vault holds the question rather than
+  guessing: [Business](../03-business-domains/business.md),
+  [Marketplace](../03-business-domains/marketplace.md),
+  [Network](../10-platform-components/network.md), and
+  [Foundation](../12-governance-and-legacy/foundation.md). Each has readings
+  that would belong in different sections.
+* **Panchita Core vs Central** — is Core the substrate Central runs on, or the
+  essential Panchita independent of any surface?
+  [10 · Panchita Core](../10-platform-components/panchita-core.md)
+* **The Vision itself.** [00 · Vision](../00-master-blueprint/vision.md) is now
+  defined as a concept and is still empty. The blueprint preserves and executes
+  a direction nobody has written down.
 
 ## L-10 — Define Builder
 

@@ -45,7 +45,26 @@ or the LLM behind the Gateway costs.
 
 ---
 
-## B3 — All of section 03 (Modules)
+## B0 — Truck Repair v1.0 has no scope
+
+**Blocked by:** no definition of done.
+
+[Truck Repair v1.0 is the current execution priority](../00-master-blueprint/execution-priority.md),
+and nothing in this vault says what v1.0 contains.
+[03 · Truck Repair](../03-business-domains/truck-repair.md) is a concept page,
+[01 · JL Truck Repair](../01-live-systems/jl-truck-repair.md) is a stub, and the
+module contract it depends on is undocumented.
+
+So the highest-priority work in the project is the least specified. **Scoping it
+is an owner decision**, not something the vault can derive — the external
+Shopmonkey and quoting skills describe how the work is done today, but not which
+part Panchita is meant to take over first.
+
+**Unblocked by:** the owner naming what v1.0 must do.
+
+---
+
+## B3 — All of section 03 (Business Domains)
 
 **Blocked by:** no module contract.
 

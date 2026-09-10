@@ -6,6 +6,13 @@
 > **Basis:** `ed568e6`
 > **Last reviewed:** 2026-09-10
 
+> **Not to be confused with Panchita Standards.** This page is *engineering and
+> testing quality* — how code and tests are held to a bar. **Panchita
+> Standards** is the system-wide governance capability: interoperability
+> expectations, operating standards and approved conventions across the
+> ecosystem. Different scope, different section —
+> [10 · Standards](../10-platform-components/standards.md).
+
 ## Q1 — A bug is closed by a test that fails without the fix
 
 Not by a fix. Both Voice v2 fixes were verified against the pre-fix page and the
