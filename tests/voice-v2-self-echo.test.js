@@ -193,32 +193,7 @@ test("the gate never wedges shut when TTS never reports an end", async () => {
 });
 
 /* -- Intentional barge-in still works ------------------------------------- */
-test("Luis can still interrupt Panchita intentionally", async () => {
-  const a = answeringApp();
-  await a.login();
-  await a.startVoice();
-  await askOnce(a, "Hola Panchita");
-  assert.strictEqual(a.speaking(), true);
 
-  a.current().emitAppend("Espera un momento", true);     // not her words
-  await a.settle(80);
-  assert.strictEqual(a.speaking(), false, "she did not stop when interrupted");
-  assert.ok(a.stat("barge-ins") >= 1);
-});
-
-test("an interruption is followed by a normal turn once she is silent", async () => {
-  const a = answeringApp();
-  await a.login();
-  await a.startVoice();
-  await askOnce(a, "Hola Panchita");
-  a.current().emitAppend("Espera", true);
-  await a.settle(2000);
-  assert.strictEqual(a.gate(), "open");
-  a.current().emitAppend("mejor mandame la factura", true);
-  await a.settle(GRACE_MS + 800);
-  assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
-    ["Hola Panchita", "mejor mandame la factura"]);
-});
 
 test("she never interrupts herself: her own fragments do not stop her speaking", async () => {
   const a = answeringApp();
@@ -474,4 +449,87 @@ test("voice survives Android refusing the first start() after the TTS reset", as
   a.current().emitAppend("Cierra la orden", true);
   await a.settle(GRACE_MS + 800);
   assert.strictEqual(a.turnRequests().length, 2, "voice never recovered its microphone");
+});
+
+/* -- Contrato nuevo: el barge-in POR VOZ queda desactivado ---------------- */
+test("hablar encima de ella ya NO la interrumpe ni se envia (anti-eco)", async () => {
+  // Cambio deliberado: su propia voz mal transcrita usaba exactamente esta
+  // ruta para colarse como turno del usuario. Mientras ella habla, nada de lo
+  // que oye el microfono para su voz ni se guarda.
+  const a = answeringApp();
+  await a.login(); await a.startVoice();
+  await askOnce(a, "Hola Panchita");
+  assert.strictEqual(a.speaking(), true);
+
+  a.current().emitAppend("Espera un momento", true);
+  await a.settle(150);
+  assert.strictEqual(a.speaking(), true, "su voz fue interrumpida por el microfono");
+  assert.ok(a.stat("stt ignored (assistant speaking)") >= 1, "no se conto el descarte");
+  assert.ok(a.traceHas("stt.ignored.assistant_speaking"), "falta la traza pedida");
+
+  await a.settle(12000);
+  assert.strictEqual(a.turnRequests().length, 1, "lo oido durante su voz se envio");
+});
+
+test("Luis SI puede interrumpirla con el boton Silenciar", async () => {
+  const a = answeringApp();
+  await a.login(); await a.startVoice();
+  await askOnce(a, "Hola Panchita");
+  assert.strictEqual(a.speaking(), true);
+  await a.mute();
+  assert.strictEqual(a.speaking(), false, "Silenciar no corto su voz");
+  assert.strictEqual(a.state(), "MANUALLY_MUTED");
+});
+
+test("cuando ella termina, vuelve sola a ESCUCHANDO y acepta el turno siguiente", async () => {
+  const a = answeringApp();
+  await a.login(); await a.startVoice();
+  await askOnce(a, "Hola Panchita");
+  await a.settle(12000);
+  assert.ok(a.traceHas("assistant.speech.end"), "falta assistant.speech.end");
+  assert.ok(a.traceHas("recovery.start"), "falta recovery.start");
+  assert.ok(a.traceHas("listening.resumed"), "falta listening.resumed");
+  assert.strictEqual(a.state(), "LISTENING", "no volvio a ESCUCHANDO: " + a.state());
+
+  a.current().emitAppend("Cierra la orden del jueves", true);
+  await a.settle(GRACE_MS + 800);
+  assert.strictEqual(a.turnRequests().length, 2, "no acepto el turno siguiente");
+});
+
+/* -- EL CASO REPORTADO EN EL TELEFONO ------------------------------------- */
+test("REPRO: su saludo mal transcrito no vuelve como mensaje azul del usuario", async () => {
+  // Panchita dice: "Aqui estoy, Luis! Todo en orden. Que necesitas?"
+  // El STT lo captura con errores, asi que el eco POR TEXTO no lo atrapa.
+  // En el build anterior esa hipotesis se trataba como interrupcion humana:
+  // paraba su TTS, se guardaba en cuarentena, y al marcar speakerStoppedAt las
+  // siguientes hipotesis de su audio residual llegaban >300ms despues y se
+  // declaraban "humano confirmado" -> se enviaban como turno del usuario.
+  const ANSWER = "Aqui estoy, Luis. Todo en orden. Que necesitas?";
+  const a = createApp({
+    gateway: (p) => p.factor_provided !== undefined
+      ? { status: "completed", session_token: "test-session-1", human_readable_response: "Hola." }
+      : { status: "completed", human_readable_response: ANSWER }
+  });
+  await a.login();
+  await a.startVoice();
+  await askOnce(a, "Panchita prueba numero 1");
+  assert.strictEqual(a.speaking(), true, "deberia estar hablando");
+
+  // Su propio audio, mal transcrito, entrando por el microfono.
+  for (const garbled of ["aqui estoy luiz", "toro en orden", "ke necesitaz"]) {
+    a.current().emitAppend(garbled, true);
+    await a.settle(250);
+  }
+  await a.settle(14000);
+
+  const msgs = a.turnRequests().map((q) => q.body.message);
+  assert.strictEqual(msgs.length, 1,
+    "su propia voz se envio como turno del usuario: " + JSON.stringify(msgs));
+  assert.strictEqual(msgs[0], "Panchita prueba numero 1");
+  assert.strictEqual(a.state(), "LISTENING", "no volvio a ESCUCHANDO");
+
+  // Y el turno siguiente, ya en silencio, si entra.
+  a.current().emitAppend("Panchita prueba numero 2", true);
+  await a.settle(GRACE_MS + 800);
+  assert.strictEqual(a.turnRequests().length, 2, "no acepto el turno 2");
 });

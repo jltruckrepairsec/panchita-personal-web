@@ -390,7 +390,11 @@
   // mis-transcription of her audio matches nothing at all. So submission is
   // gated on LIFECYCLE instead: while her speaker is live, and for a tail
   // afterwards, nothing the microphone hears may become a turn.
-  var TTS_TAIL_MS = 450;          // speaker tail / room reverb after she stops
+  // Ventana de RECUPERACION tras el fin REAL del audio de Panchita. No decide
+  // cuando termina ella -- eso lo dice speechSynthesis -- solo cubre la cola
+  // del altavoz y las transcripciones que el motor todavia tenia en vuelo.
+  var RECOVERY_MS = 700;
+  var TTS_TAIL_MS = 450;          // (conservado: techo historico del gate)
   var TTS_POLL_MS = 150;          // how often we re-check whether she is speaking
   var TTS_MIN_HOLD_MS = 700;      // covers the deferred speak() start-up
   var TTS_GATE_MAX_MS = 90000;    // absolute ceiling; the gate can never wedge
@@ -888,6 +892,7 @@
     finalsEver: false,
     notAllowedRetries: 0,
     needsGesture: false,   // waiting for Luis to tap; NOT muted, NOT off
+    recovering: false,            // RECOVERY: su audio acabo, aun tirando restos
     quarantineConfirmed: false,   // proven human: heard after her speaker died
     speakerStoppedAt: 0,
     prefixTimer: null,
@@ -915,7 +920,8 @@
              stale: 0, coalesced: 0, gated: 0, bargeIns: 0, micResets: 0, breaker: 0,
              carried: 0, prefixDropped: 0, onsets: 0,
              built: 0, started: 0, ended: 0, noSpeech: 0, aborted: 0, micAcquired: 0,
-             lostResults: 0, staleBy: {}, notAllowedAfterAudio: 0, gestureWaits: 0 }
+             lostResults: 0, staleBy: {}, notAllowedAfterAudio: 0, gestureWaits: 0,
+             ignoredWhileSpeaking: 0, selfEcho: 0, recoveries: 0 }
   };
 
   var STR = {
@@ -1076,7 +1082,8 @@
     if (!v.active) return "OFF";
     if (v.muted) return "MANUALLY_MUTED";
     if (v.needsGesture) return "AWAITING_USER_GESTURE";
-    if (v.phase === "speaking") return "ASSISTANT_SPEAKING";
+    if (v.recovering) return "RECOVERY";
+    if (v.gate === "held" || v.phase === "speaking") return "ASSISTANT_SPEAKING";
     if (v.userSpeaking) return "USER_SPEAKING";
     if (v.assembler.hasPending()) return "USER_PAUSED";
     if (v.phase === "thinking") return "THINKING";
@@ -1133,6 +1140,10 @@
       "interruption held: " + JSON.stringify(v.quarantine),
       "interruption confirmed: " + v.quarantineConfirmed,
       "speaker stopped at: " + (v.speakerStoppedAt ? (Date.now() - v.speakerStoppedAt) + "ms ago" : "n/a"),
+      "stt ignored (assistant speaking): " + v.stats.ignoredWhileSpeaking,
+      "stt ignored (self echo): " + v.stats.selfEcho,
+      "recoveries: " + v.stats.recoveries,
+      "recovery window: " + RECOVERY_MS + "ms",
       "interruptions carried: " + v.stats.carried,
       "interruptions dropped: " + v.stats.prefixDropped,
       "tts gate: " + v.gate,
@@ -1355,12 +1366,23 @@
         v.gateTimer = setTimeout(poll, TTS_POLL_MS);
         return;
       }
-      // She is silent. Hold through the speaker tail, then open.
+      // Su audio termino de verdad (speechSynthesis ya no habla). El evento
+      // real es la fuente; el techo TTS_GATE_MAX_MS solo es red de seguridad.
+      // Entra RECOVERY: una ventana corta en la que el gate SIGUE cerrado
+      // para tirar las transcripciones residuales de su propia voz que el
+      // motor todavia tenia en vuelo.
+      if (!v.recovering) {
+        v.recovering = true;
+        v.stats.recoveries++;
+        traceEvent("assistant.speech.end", "audio terminado");
+        traceEvent("recovery.start", RECOVERY_MS + "ms");
+        renderDiag();
+      }
       v.gateTimer = setTimeout(function () {
         v.gateTimer = null;
         if (epoch !== v.ttsEpoch) return;
         openGate(epoch, true);
-      }, TTS_TAIL_MS);
+      }, RECOVERY_MS);
     })();
   }
 
@@ -1476,11 +1498,10 @@
     if (epoch !== undefined && epoch !== v.ttsEpoch) return;
     clearGateTimer();
 
-    // What, if anything, Luis said over her, and whether we can prove it was
-    // a person (heard after her speaker had already gone quiet).
-    var carried = releasableInterruption();
-    var confirmed = v.quarantineConfirmed;
+    // La cuarentena queda vacia por diseno: nada oido mientras ella hablaba
+    // se guarda ya. Se limpia igualmente por si un camino antiguo dejo restos.
     clearInterruption();
+    v.recovering = false;
     if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
 
     // A confirmed interruption means Luis is MID-SENTENCE right now. Cutting
@@ -1488,14 +1509,16 @@
     // the very words the reset exists to protect. So the reset is skipped in
     // exactly that case, and taken otherwise (a pure self-echo storm, where
     // dropping whatever the recogniser captured from her speaker is the point).
-    var speaking = confirmed && carried;
     // needsGesture is included deliberately: while we are waiting for Luis to
     // tap, NOTHING may reopen the recogniser behind his back. Without this the
     // TTS gate quietly restarted it and the gesture gate was defeated.
     // userSpeaking is included for the same reason: the phone trace showed this
     // reset firing at +10878ms while speech.start #1 (+9937ms) was still open,
     // aborting the recogniser in the middle of what Luis was saying.
-    var doReset = resetMic && !speaking && v.active && !v.muted && !v.stopping &&
+    // Ya no hay cuarentena que preservar: el unico motivo para saltar el reset
+    // es que Luis este a media frase (userSpeaking), o que estemos esperando
+    // su toque (needsGesture).
+    var doReset = resetMic && v.active && !v.muted && !v.stopping &&
                   !v.needsGesture && !v.userSpeaking;
 
     if (doReset && v.rec) {
@@ -1520,32 +1543,12 @@
     }
     v.assembler.discard();
 
-    if (carried && confirmed) {
-      // Proven human. It becomes an ordinary turn even if Luis stops talking
-      // now, and if he keeps going his next words merge into the same turn.
-      v.stats.carried++;
-      v.assembler.resume(carried, onAssembledTurn);
-    } else if (carried) {
-      // Not proven. Seed it UNARMED: on its own it can never be submitted.
-      // Only Luis carrying on talking releases it, which her audio cannot do
-      // once her speaker is off.
-      v.assembler.seed(carried);
-      v.prefixTimer = setTimeout(function () {
-        v.prefixTimer = null;
-        if (!v.assembler.isArmed()) {      // nobody kept talking: not a human
-          v.assembler.discard();
-          v.stats.prefixDropped++;
-          renderDiag();
-        } else {
-          v.stats.carried++;
-        }
-      }, PREFIX_GRACE_MS);
-    }
-
 
     v.gate = "open";
-    v.echo.refresh(Date.now());   // her words stay echo-suspect from NOW
+    v.recovering = false;
+    v.echo.refresh(Date.now());   // sus palabras siguen siendo sospechosas AHORA
     if (v.active && !v.muted && v.phase === "speaking") setPhase("listening");
+    traceEvent("listening.resumed");
     renderDiag();
   }
 
@@ -1577,6 +1580,8 @@
     // until she is measurably silent. This, not the echo guard, is what makes
     // her own loudspeaker output unable to become a turn.
     v.speakerStoppedAt = 0;              // she is about to make sound again
+    v.recovering = false;
+    traceEvent("assistant.speech.start", snip(toSpeak));
     var epoch = holdGate();
     scheduleGateRelease(epoch, Date.now() + TTS_MIN_HOLD_MS);
 
@@ -1799,20 +1804,10 @@
           if (v.stats.interims % 4 === 1) traceEvent("interim", snip(text));
           v.userSpeaking = true;
           if (v.gate === "held") {
-            // Earliest safe barge-in: an unfinalised hypothesis that is not
-            // her words. This fires hundreds of milliseconds before the final
-            // would, and it is what makes her stop while Luis is still in his
-            // first phrase -- which in turn is what lets the rest of that
-            // phrase be captured instead of lost.
-            if (!v.echo.isLikelyEcho(text, now)) {
-              confirmHumanIfSpeakerDead(now);
-              rememberInterruption(text, now);
-              if (v.phase === "speaking" || speakerBusy()) {
-                v.stats.bargeIns++;
-                touchIdle();
-                stopSpeaking();
-              }
-            } else { v.stats.echoes++; }
+            // Mismo criterio que para los FINAL: mientras ella habla (o en
+            // recuperacion) una hipotesis no confirmada no interrumpe nada ni
+            // se guarda. Solo se cuenta.
+            v.stats.ignoredWhileSpeaking++;
           } else {
             v.lastInterim = text;
             touchIdle();
@@ -1825,15 +1820,32 @@
         // Her loudspeaker is live (or still ringing out). Nothing heard here
         // may be submitted, whatever it says. It may stop her, and it is held
         // in quarantine so an interruption is not lost.
+        // ---- ASSISTANT_SPEAKING / RECOVERY: se descarta TODO -------------
+        // CAUSA RAIZ DEL BUG DE AUTOCAPTURA, corregida aqui.
+        //
+        // Antes, una hipotesis oida mientras ella hablaba que NO coincidia con
+        // su texto se trataba como interrupcion humana: paraba su TTS, se
+        // guardaba en cuarentena y openGate la liberaba como turno del
+        // usuario. Su propia voz mal transcrita entraba por ahi. Peor: al
+        // parar su TTS se marcaba speakerStoppedAt, y el audio residual que el
+        // motor seguia procesando llegaba >300ms despues, con lo que
+        // confirmHumanIfSpeakerDead lo declaraba "humano confirmado" y lo
+        // enviaba. Asi es como "Aqui estoy, Luis..." acabo siendo un mensaje
+        // azul del usuario.
+        //
+        // Mientras su altavoz esta vivo, o durante la ventana de recuperacion
+        // posterior, NADA de lo que oye el microfono puede convertirse en
+        // turno, ni parar su voz, ni quedar en cuarentena. Sin excepciones.
         if (v.gate === "held") {
           v.stats.gated++;
-          if (v.echo.isLikelyEcho(text, now)) { v.stats.echoes++; }
-          else {
-            confirmHumanIfSpeakerDead(now);
-            rememberInterruption(text, now);
-            v.stats.bargeIns++;
-            touchIdle();
-            stopSpeaking();   // she stops; the gate opens once she is silent
+          if (v.echo.isLikelyEcho(text, now)) {
+            v.stats.echoes++;
+            v.stats.selfEcho++;
+            traceEvent("stt.ignored.self_echo", snip(text));
+          } else {
+            v.stats.ignoredWhileSpeaking++;
+            traceEvent(v.recovering ? "stt.ignored.recovery"
+                                    : "stt.ignored.assistant_speaking", snip(text));
           }
           renderDiag();
           continue;
@@ -2047,6 +2059,7 @@
     v.echo.clear();
     v.assembler.discard();
     clearInterruption();
+    v.recovering = false;
     if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
     v.lastInterim = "";
     v.userSpeaking = false;
@@ -2151,6 +2164,7 @@
     traceEvent("voice.end");
     v.assembler.discard();
     clearInterruption();
+    v.recovering = false;
     if (v.prefixTimer) { clearTimeout(v.prefixTimer); v.prefixTimer = null; }
     v.lastInterim = "";
     v.userSpeaking = false;

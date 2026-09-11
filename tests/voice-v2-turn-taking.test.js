@@ -130,31 +130,6 @@ test("words not yet finalised survive Android restarting the recogniser", async 
 });
 
 /* -- TEST 4: barge-in keeps the interruption ----------------------------- */
-test("TEST 4: interrupting Panchita stops her AND keeps the interruption", async () => {
-  const a = await live("Claro, dime en que te puedo ayudar con la orden del jueves del camion azul.");
-  await say(a, "Hola Panchita");
-  await a.settle(GRACE_MS + 400);
-  assert.strictEqual(a.speaking(), true, "she should be answering by now");
-
-  // Luis talks over her. The first words arrive as interims while she is
-  // still playing; she must stop, and those words must not be thrown away.
-  const r = a.current();
-  if (r.onspeechstart) r.onspeechstart();
-  r.emitAppend("Espera", false);
-  await a.settle(120);
-  assert.strictEqual(a.speaking(), false, "she did not stop when interrupted");
-
-  r.emitAppend("Espera todavia", false);
-  await a.settle(150);
-  await a.settle(1200);                               // gate opens, mic resets
-  await say(a, "no termino");
-  await a.settle(GRACE_MS + 500);
-
-  const msgs = a.turnRequests().map((q) => q.body.message);
-  assert.strictEqual(msgs.length, 2, "expected the interruption to become a turn: " + JSON.stringify(msgs));
-  assert.match(msgs[1], /Espera/, "the interruption's opening words were lost: " + JSON.stringify(msgs[1]));
-  assert.match(msgs[1], /no termino/, "the rest of the interruption was lost: " + JSON.stringify(msgs[1]));
-});
 
 /* Settle until her loudspeaker is actually live, so a test never races the
    round trip. Fails loudly rather than silently proceeding. */
@@ -172,34 +147,6 @@ async function untilQuiet(a, label) {
 }
 
 /* -- TEST 5b: barge-in twice in one session ------------------------------ */
-test("TEST 5b: barge-in works twice in the same session", async () => {
-  const a = await live("Claro, dime en que te puedo ayudar con eso ahora mismo por favor.");
-  for (let round = 0; round < 2; round++) {
-    await untilQuiet(a, "round " + round + " start");
-    await say(a, "Pregunta numero " + round);
-    await a.settle(GRACE_MS + 400);
-    await untilSpeaking(a, "round " + round);
-
-    // Luis interrupts and says a COMPLETE sentence over her, then stops.
-    const r = a.current();
-    if (r.onspeechstart) r.onspeechstart();
-    r.emitAppend("Espera", false);
-    await a.settle(120);
-    assert.strictEqual(a.speaking(), false, "round " + round + ": barge-in did not stop her");
-    r.emitAppend("Espera mejor manana", false);
-    await a.settle(400);
-    r.emitAppend("Espera mejor manana", true);
-    await a.settle(GRACE_MS + 1500);
-
-    const msgs = a.turnRequests().map((q) => q.body.message);
-    assert.ok(msgs.some((m) => /Espera mejor manana/.test(m)),
-      "round " + round + ": the interruption was lost (" + JSON.stringify(msgs) + ")");
-    assert.ok(msgs.some((m) => m === "Pregunta numero " + round),
-      "round " + round + ": the question itself was lost (" + JSON.stringify(msgs) + ")");
-  }
-  assert.ok(a.stat("barge-ins") >= 2, "only " + a.stat("barge-ins") + " barge-ins registered");
-  assert.strictEqual(a.voiceActive(), true);
-});
 
 /* -- TEST 6: healthy afterwards ------------------------------------------ */
 test("TEST 6: after all of that the next turn works normally", async () => {
@@ -278,4 +225,44 @@ test("the assistant-speaking and muted axes are independent", async () => {
   assert.strictEqual(a.diag()["manually muted"], "true");
   assert.strictEqual(a.speaking(), false, "muting did not stop her audio");
   assert.strictEqual(a.state(), "MANUALLY_MUTED");
+});
+
+/* -- TEST 4 / 5b, reescritos tras el fix de autocaptura ------------------- */
+test("TEST 4 (nuevo contrato): hablar encima de ella no la corta ni se envia", async () => {
+  const a = await live("Claro, dime en que te puedo ayudar con la orden del jueves.");
+  await say(a, "Hola Panchita");
+  await a.settle(GRACE_MS + 500);
+  await untilSpeaking(a, "TEST 4");
+
+  a.current().emitAppend("Espera todavia no termino", true);
+  await a.settle(200);
+  assert.strictEqual(a.speaking(), true, "su voz fue cortada por el microfono");
+  assert.ok(a.traceHas("stt.ignored.assistant_speaking"));
+
+  await a.settle(14000);
+  assert.strictEqual(a.turnRequests().length, 1, "lo oido durante su voz se envio");
+  assert.strictEqual(a.state(), "LISTENING");
+});
+
+test("TEST 5b (nuevo contrato): diez turnos seguidos, sin fantasmas ni bucles", async () => {
+  // La prueba obligatoria del encargo: 10 turnos consecutivos manos libres.
+  const a = await live("Claro Luis, aqui estoy. Todo en orden.");
+  for (let i = 1; i <= 10; i++) {
+    await untilQuiet(a, "turno " + i);
+    await say(a, "Panchita prueba numero " + i);
+    await a.settle(GRACE_MS + 600);
+    await a.settle(14000);                 // deja que conteste y vuelva a escuchar
+    assert.strictEqual(a.turnRequests().length, i,
+      "turno " + i + ": se enviaron " + a.turnRequests().length + " mensajes");
+  }
+  const msgs = a.turnRequests().map((q) => q.body.message);
+  for (let i = 1; i <= 10; i++) {
+    assert.strictEqual(msgs[i - 1], "Panchita prueba numero " + i);
+  }
+  assert.strictEqual(a.stat("breaker"), 0, "se disparo el cortacircuitos");
+  assert.strictEqual(a.voiceActive(), true, "la voz murio durante los 10 turnos");
+  assert.strictEqual(a.muted(), false);
+  // Ningun mensaje del usuario puede ser texto de Panchita.
+  assert.ok(!msgs.some((m) => /aqui estoy|todo en orden/i.test(m)),
+    "su propia voz aparecio como turno del usuario: " + JSON.stringify(msgs));
 });

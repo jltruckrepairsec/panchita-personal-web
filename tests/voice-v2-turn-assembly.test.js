@@ -214,25 +214,21 @@ test("a second turn works after the first one is answered", async () => {
 });
 
 /* -- Barge-in, echo, duplicates ------------------------------------------- */
-test("barge-in stops Panchita, and the speech she is interrupted with is not submitted", async () => {
-  // The contract changed with the self-echo fix, deliberately: nothing heard
-  // while her loudspeaker is live may become a turn, because at that moment
-  // her own audio and Luis's are indistinguishable. Barge-in still works --
-  // she stops -- and what Luis says once she is silent is an ordinary turn.
+test("lo oido mientras ella habla no se envia; lo dicho despues si", async () => {
+  // Contrato nuevo tras el fix de autocaptura: el barge-in por voz esta
+  // desactivado, de modo que su propia voz no puede colarse como turno.
   const a = await live();
   a.current().emitAppend("Hola Panchita", true);
   await a.settle(GRACE_MS + 500);
-  assert.strictEqual(a.speaking(), true, "she should be speaking by now");
+  assert.strictEqual(a.speaking(), true, "deberia estar contestando");
 
-  a.current().emitAppend("Espera", true);          // Luis talks over her
-  await a.settle(60);
-  assert.strictEqual(a.speaking(), false, "barge-in did not stop her");
-  assert.ok(a.stat("barge-ins") >= 1);
+  a.current().emitAppend("Espera", true);            // encima de ella
+  await a.settle(150);
+  assert.strictEqual(a.speaking(), true, "el microfono corto su voz");
 
-  await a.settle(1500);                            // gate opens, mic reset
-  assert.strictEqual(a.gate(), "open");
-  a.current().emitAppend("mejor manana", true);    // he keeps talking
-  await a.settle(GRACE_MS + 2000);
+  await a.settle(12000);                              // termina y vuelve a escuchar
+  a.current().emitAppend("mejor manana", true);       // ya en silencio
+  await a.settle(GRACE_MS + 800);
 
   assert.deepStrictEqual(a.turnRequests().map((q) => q.body.message),
     ["Hola Panchita", "mejor manana"]);
