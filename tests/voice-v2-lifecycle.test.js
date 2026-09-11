@@ -294,3 +294,133 @@ test("the turn-boundary window was NOT touched by this change", async () => {
   const a = await live();
   assert.strictEqual(a.diag()["silence grace"], "1800ms (resets on speech)");
 });
+
+/* ========================================================================
+ * gate.reset root-cause fix — the required matrix A..G
+ * ====================================================================== */
+
+function answering(extra) {
+  return createApp(Object.assign({
+    gateway: (p) => p.factor_provided !== undefined
+      ? { status: "completed", session_token: "test-session-1", human_readable_response: "Hola Luis." }
+      : { status: "completed", human_readable_response: "Claro, dime en que te puedo ayudar." }
+  }, extra || {}));
+}
+
+async function askAndLetHerAnswer(a, phrase) {
+  a.current().emitAppend(phrase, true);
+  await a.settle(1800 + 400);
+}
+
+/* -- A. gate.reset never aborts while userSpeaking=true ------------------ */
+test("A: gate.reset does not abort while speech.start is open", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  await askAndLetHerAnswer(a, "Hola Panchita");
+  await a.settle(600);
+  if (a.current().onspeechstart) a.current().onspeechstart();   // he starts talking
+  const before = a.stat("mic resets after tts");
+  await a.settle(9000);
+  assert.strictEqual(a.stat("mic resets after tts"), before,
+    "aborted the recogniser mid-utterance");
+});
+
+test("A2: once he stops, the reset is allowed again on the next answer", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  await askAndLetHerAnswer(a, "Hola Panchita");
+  await a.settle(9000);
+  assert.ok(a.stat("mic resets after tts") >= 1, "the reset never ran when it should have");
+});
+
+/* -- B. no replacement constructed in the same tick as the abort --------- */
+test("B: the reset reuses the recogniser instead of constructing one", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  const built = a.stat("built");
+  const obj = a.current();
+  await askAndLetHerAnswer(a, "Hola Panchita");
+  await a.settle(9000);
+  assert.strictEqual(a.stat("built"), built, "a new recogniser was constructed by the reset");
+  assert.strictEqual(a.current(), obj, "the object was replaced");
+  assert.ok(a.traceHas("gate.reset.abort"), "the reset is not traced");
+});
+
+test("B2: several answers in a row still build nothing new", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  const built = a.stat("built");
+  for (let i = 0; i < 3; i++) {
+    await askAndLetHerAnswer(a, "pregunta numero " + i);
+    await a.settle(9000);
+  }
+  assert.strictEqual(a.stat("built"), built,
+    "built " + (a.stat("built") - built) + " recognisers across three answers");
+  assert.strictEqual(a.voiceActive(), true);
+});
+
+/* -- C. the deferred reset still protects the TTS gate ------------------- */
+test("C: nothing can be submitted while her speaker is live, reset deferred or not", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  await askAndLetHerAnswer(a, "Hola Panchita");
+  await a.settle(400);
+  assert.strictEqual(a.gate(), "held");
+  a.current().emitAppend("cierra la orden del camion azul", true);   // not her words
+  await a.settle(1800 + 300);
+  assert.strictEqual(a.turnRequests().length, 1, "the gate let a turn through while she spoke");
+});
+
+/* -- D. the onend reuse path is unchanged -------------------------------- */
+test("D: the plain onend restart path still works and still reuses the object", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  const built = a.stat("built");
+  const obj = a.current();
+  a.current().androidNoSpeech();
+  await a.settle(900);
+  assert.strictEqual(a.stat("built"), built, "onend restart built a new recogniser");
+  assert.strictEqual(a.current(), obj);
+  assert.ok(a.traceHas("via onend"));
+  a.current().emitAppend("Cierra la orden", true);
+  await a.settle(1800 + 600);
+  assert.strictEqual(a.turnRequests().length, 1, "voice broken after an onend restart");
+});
+
+/* -- E. stale callbacks still cannot submit ------------------------------ */
+test("E: a disowned recogniser still cannot submit a transcript", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  const orphan = a.current();
+  await a.mute();                       // mute disowns the recogniser
+  orphan.emitAppend("Panchita borra todo", true);
+  await a.settle(1800 + 800);
+  assert.strictEqual(a.turnRequests().length, 0, "a disowned recogniser submitted");
+  assert.ok(a.stat("TRANSCRIPTS LOST (stale onresult)") >= 1, "the drop was not recorded");
+  assert.match(a.diag()["stale total"], /onresult=/);
+});
+
+/* -- F. duplicate suppression unchanged ---------------------------------- */
+test("F: an identical repeated turn is still suppressed", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  await askAndLetHerAnswer(a, "Hola Panchita");
+  await a.settle(9000);
+  a.current().emitAppend("Hola Panchita", true);
+  await a.settle(1800 + 800);
+  assert.strictEqual(a.turnRequests().length, 1, "the duplicate was not suppressed");
+  assert.ok(a.stat("duplicates suppressed") >= 1);
+});
+
+/* -- G. the lifecycle permission fix stays green ------------------------- */
+test("G: not-allowed after working audio still does not claim revoked permission", async () => {
+  const a = answering();
+  await a.login(); await a.startVoice(); await a.settle(500);
+  a.current().emitAppend("Panchita prueba", true);
+  await a.settle(80);
+  assert.strictEqual(a.diag()["finals ever"], "true");
+  a.current().fireError("not-allowed");
+  await a.settle(200);
+  assert.ok(!a.messages().some((m) => /Permiso de micr[oó]fono denegado/i.test(m)));
+  assert.strictEqual(a.voiceActive(), true);
+});

@@ -235,21 +235,69 @@ test("she never interrupts herself: her own fragments do not stop her speaking",
 });
 
 /* -- Stale events during and after TTS ------------------------------------ */
-test("the recogniser that was live during TTS cannot submit after the reset", async () => {
+test("audio captured during TTS cannot become a turn after the reset", async () => {
+  // The reset no longer REPLACES the recogniser object -- it aborts and lets
+  // the object's own onend restart it, because constructing a replacement in
+  // the same tick was killing the engine on the phone. The invariant this
+  // test exists for is unchanged: nothing the microphone picked up while her
+  // speaker was live may become a Gateway turn.
   const a = answeringApp();
   await a.login();
   await a.startVoice();
-  const duringTts = a.current();
   await askOnce(a, "Hola Panchita");
-  await a.settle(8000);                        // gate opens, mic is reset
-  assert.notStrictEqual(a.current(), duringTts, "the microphone was not replaced");
+  await a.settle(8000);                        // she finishes, gate opens, mic resets
 
-  duringTts.emitAppend("Aqui esta la orden del jueves", true);   // late echo
-  duringTts.fireEnd();
-  duringTts.fireError("network");
+  assert.ok(a.traceHas("gate.reset.abort"), "the post-TTS reset did not happen");
+  assert.strictEqual(a.gate(), "open");
+
+  // Her own words, arriving after the reset, on the live recogniser.
+  a.current().emitAppend("Aqui esta la orden del jueves", true);
   await a.settle(GRACE_MS + 2000);
-  assert.strictEqual(a.turnRequests().length, 1, "a stale recogniser submitted after TTS");
-  assert.ok(a.stat("stale callbacks ignored") >= 1);
+  assert.strictEqual(a.turnRequests().length, 1, "TTS audio became a turn after the reset");
+  assert.strictEqual(a.voiceActive(), true);
+});
+
+test("the post-TTS reset defers the restart instead of constructing in the same tick", async () => {
+  // The confirmed root cause: instance #2 and #3 were built and started in the
+  // same millisecond as the previous instance's abort, and never produced a
+  // result again. The reset must now reuse the object via the onend path.
+  const a = answeringApp();
+  await a.login();
+  await a.startVoice();
+  const before = a.recognizers.length;
+  const obj = a.current();
+  await askOnce(a, "Hola Panchita");
+  await a.settle(8000);
+
+  assert.ok(a.traceHas("gate.reset.abort"), "the reset did not run");
+  assert.strictEqual(a.recognizers.length, before,
+    "the reset built " + (a.recognizers.length - before) + " new recogniser(s); it must reuse");
+  assert.strictEqual(a.current(), obj, "the recogniser object was replaced");
+  assert.ok(a.traceHas("via onend"), "the restart did not go through the proven onend path");
+
+  // And it is genuinely listening again.
+  a.current().emitAppend("Cierra la orden del jueves", true);
+  await a.settle(GRACE_MS + 800);
+  assert.strictEqual(a.turnRequests().length, 2, "voice did not work after the deferred reset");
+});
+
+test("the post-TTS reset never aborts while Luis is mid-utterance", async () => {
+  // The phone aborted the recogniser at +10878ms with speech.start #1 still
+  // open from +9937ms, cutting off what he was saying.
+  const a = answeringApp();
+  await a.login();
+  await a.startVoice();
+  await askOnce(a, "Hola Panchita");
+  await a.settle(600);
+  assert.strictEqual(a.speaking(), true, "she should still be answering");
+
+  // He starts talking over the tail; speech.start is open when the gate opens.
+  if (a.current().onspeechstart) a.current().onspeechstart();
+  const resetsBefore = a.stat("mic resets after tts");
+  await a.settle(9000);
+
+  assert.strictEqual(a.stat("mic resets after tts"), resetsBefore,
+    "the reset fired while he was mid-utterance");
   assert.strictEqual(a.voiceActive(), true);
 });
 

@@ -1492,16 +1492,31 @@
     // needsGesture is included deliberately: while we are waiting for Luis to
     // tap, NOTHING may reopen the recogniser behind his back. Without this the
     // TTS gate quietly restarted it and the gesture gate was defeated.
+    // userSpeaking is included for the same reason: the phone trace showed this
+    // reset firing at +10878ms while speech.start #1 (+9937ms) was still open,
+    // aborting the recogniser in the middle of what Luis was saying.
     var doReset = resetMic && !speaking && v.active && !v.muted && !v.stopping &&
-                  !v.needsGesture;
+                  !v.needsGesture && !v.userSpeaking;
 
-    if (doReset) {
-      if (v.restartTimer) { clearTimeout(v.restartTimer); v.restartTimer = null; }
-      var old = v.rec;
-      v.rec = null;                       // drop ownership FIRST, so the onend
-      if (old) { try { old.abort(); } catch (e) {} }   // abort() fires is stale
+    if (doReset && v.rec) {
+      // ROOT CAUSE OF THE PHONE FAILURE, fixed here.
+      //
+      // This used to drop ownership, abort, and construct+start a replacement
+      // in the same tick. The device trace showed the consequence: the new
+      // instance started 1ms BEFORE the old one's teardown callbacks arrived,
+      // and every recogniser born that way was dead -- audio.start and
+      // speech.start fired, no result ever came back. Sessions s5..s13 on
+      // instance #3: nine sessions, speech detected on four, fin=0 on all.
+      //
+      // Ownership is now RETAINED across the abort, so the object's own onend
+      // drives the restart through the via=onend path -- the one the same
+      // trace proves healthy: instance #1 restarted that way ten times and
+      // kept producing finals. That path already waits RESTART_DELAY_MS,
+      // reuses the object rather than building a new one, freezes the silence
+      // countdown across the gap and resumes it on the next onstart.
       v.stats.micResets++;
-      v.restartVia = "gate.reset";
+      traceEvent("gate.reset.abort", "#" + v.rec.__id + " restart deferred to onend");
+      try { v.rec.abort(); } catch (e) { /* onend still arrives */ }
     }
     v.assembler.discard();
 
@@ -1527,20 +1542,6 @@
       }, PREFIX_GRACE_MS);
     }
 
-    if (doReset) {
-      // Android Chrome can refuse a start() issued straight after abort().
-      // One retry on the normal restart delay; voice only fails if that fails
-      // too, because losing the session would be worse than the echo.
-      if (!startRecogniser("gate.reset")) {
-        v.restartTimer = setTimeout(function () {
-          v.restartTimer = null;
-          if (!v.active || v.stopping || v.muted || v.needsGesture || v.rec) return;
-          if (startRecogniser("gate.reset.retry")) v.stats.restarts++;
-          else failVoice(t("voiceFailed"));
-          renderDiag();
-        }, RESTART_DELAY_MS);
-      }
-    }
 
     v.gate = "open";
     v.echo.refresh(Date.now());   // her words stay echo-suspect from NOW

@@ -168,7 +168,15 @@ function createApp(opts) {
       if (this.onerror) this.onerror({ error: "no-speech" });
       this.androidEndpoint();
     }
-    abort() { this.aborted++; this.live = false; }
+    /* A real engine fires onend after abort(), asynchronously. The page now
+       depends on that to drive the post-TTS restart, so the fake must model it
+       rather than dying silently. */
+    abort() {
+      this.aborted++;
+      this.live = false;
+      this._startGen++;                     // cancel any pending onstart
+      clock.setTimeout(() => { if (this.onend) this.onend(); }, 0);
+    }
     stop() { this.stopped++; this.live = false; }
 
     /* Deliver hypotheses the way a real engine does: results accumulate and
